@@ -35,6 +35,21 @@ function petInfo(){
  let p=PETS[S.student.pet],i=stage(S.score),next=i===0?250:i===1?500:500,base=i===0?0:i===1?250:500;
  return {p,i,emoji:p.stages[i][0],name:p.stages[i][1],pct:i===2?100:Math.min(100,(S.score-base)/(next-base)*100),next};
 }
+
+function rankingRows(){
+ let rows=JSON.parse(localStorage.getItem("LQ_results")||"[]").map(x=>({name:x.student.name,className:x.student.className,score:x.score}));
+ if(S.student) rows.push({name:S.student.name,className:S.student.className,score:S.score,current:true});
+ rows.sort((a,b)=>b.score-a.score);
+ return rows.slice(0,5);
+}
+function rankingHTML(){
+ let rows=rankingRows();
+ return `<div class="ranking"><div class="ranktitle">🏆 LIVE RANKING</div>${rows.length?rows.map((r,i)=>`<div class="rankrow ${r.current?"me":""}"><b>${i+1}</b><span>${esc(r.name)}</span><strong>${r.score}</strong></div>`).join(""):`<div class="note">첫 번째 플레이어예요!</div>`}</div>`;
+}
+function evolutionToast(emoji,name){
+ const el=document.createElement("div");el.className="evo-toast";el.innerHTML=`<div class="evo-pop"><div class="evo-big">${emoji}</div><b>${esc(name)}로 진화!</b><span>LEVEL UP ✨</span></div>`;
+ document.body.appendChild(el);setTimeout(()=>el.classList.add("show"),10);setTimeout(()=>{el.classList.remove("show");setTimeout(()=>el.remove(),180)},1000);
+}
 function home(){
  layout(`<div class="card hero"><span class="badge">🎧 LISTENING QUEST</span><h1>Choose. Play.<br>Grow!</h1><p class="sub">영어 문제를 풀고 점수를 모아 내 캐릭터를 진화시키세요.</p>
  <div class="grid2"><div><label>학급</label><select id="cls">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>이름</label><input id="nm" placeholder="이름"></div></div>
@@ -49,7 +64,7 @@ function chrome(inner){
  let pi=petInfo(), pct=S.q/S.playQuestions.length*100;
  layout(`<div class="petbar"><div class="petemoji">${pi.emoji}</div><div class="evo"><b>${pi.name}</b> · ${S.score}점<div class="evoline"><div style="width:${pi.pct}%"></div></div><span class="note">${pi.i<2?`다음 진화까지 ${Math.max(0,pi.next-S.score)}점`:"최종 진화 완료!"}</span></div></div>
  <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${S.playQuestions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats"><div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
- <div class="card">${inner}</div>`);
+ <div class="playgrid"><div class="card">${inner}</div>${rankingHTML()}</div>`);
 }
 function question(){S.selected=null;S.transcript="";S.speechScore=null;let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
 function choice(q){chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title).replace(/\n/g,"<br>")}</div>${q.options.map(o=>`<button class="option ${S.selected===o?"sel":""}" data-o="${esc(o)}">${esc(o)}</button>`).join("")}<div class="actions"><button class="btn" id="check">CHECK</button></div>`);
@@ -62,8 +77,8 @@ function finish(ok,response){
  let before=stage(S.score),gain=0;if(ok){S.correct++;S.combo++;gain=100+Math.min(S.combo*10,50);S.score+=gain}else S.combo=0;
  S.answers.push({q:S.q+1,type:S.playQuestions[S.q].type,correct:ok,response,points:gain});
  let after=stage(S.score),msg=ok?`✓ 정답! +${gain}점`:"✕ 아쉬워요. 다음 문제에 도전!";
- $(".card").insertAdjacentHTML("beforeend",`<div class="feedback ${ok?"ok":"bad"}">${msg}${after>before?`<br>✨ 캐릭터가 진화했어요! ${petInfo().emoji} ${petInfo().name}`:""}</div><div class="actions"><button class="btn" id="next">NEXT →</button></div>`);
- $("#check")?.remove();document.querySelectorAll(".option,.icon").forEach(x=>x.disabled=true);$("#next").onclick=next;
+ $(".card").insertAdjacentHTML("beforeend",`<div class="feedback ${ok?"ok":"bad"}">${msg}</div><div class="actions"><button class="btn" id="next">NEXT →</button></div>`);
+ $("#check")?.remove();document.querySelectorAll(".option,.icon").forEach(x=>x.disabled=true);$("#next").onclick=next;if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);}
 }
 function norm(s){return String(s).toLowerCase().replace(/[^a-z0-9\s]/g,"").replace(/\s+/g," ").trim()}
 function sim(a,b){let A=norm(a).split(" ").filter(Boolean),B=norm(b).split(" ").filter(Boolean);if(!A.length)return 0;let used=new Set(),hit=0;A.forEach(w=>{let j=B.findIndex((x,i)=>x===w&&!used.has(i));if(j>=0){used.add(j);hit++}});return Math.round(200*hit/(A.length+B.length))}
@@ -82,12 +97,12 @@ function startRec(q){
 }
 function stopRec(q){S.recognizing=false;try{S.rec.stop()}catch(e){};S.speechScore=sim(S.transcript,q.target);setTimeout(()=>speak(q),100)}
 function finishSpeech(){
- let raw=S.speechScore, gain=Math.round(raw*1.2); // 0~120
+ let raw=S.speechScore, gain=Math.round(raw*1.2), before=stage(S.score); // 0~120
  S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});
- next();
+ let after=stage(S.score);if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);setTimeout(next,1050);}else next();
 }
 function next(){S.q++;S.recognizing=false;if(S.q>=S.playQuestions.length)results();else question()}
-function results(){save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)}의 결과</h1><div class="metrics"><div class="metric"><span>SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div><table><tr><th>문제</th><th>유형</th><th>점수</th></tr>${S.answers.map(a=>`<tr><td>Q${a.q}</td><td>${a.type}</td><td>+${a.points}${a.speechScore!=null?` (발음 ${a.speechScore})`:""}</td></tr>`).join("")}</table><div class="actions"><button class="btn secondary" id="home">처음으로</button><button class="btn" id="teacher">교사용 화면</button></div></div>`);$("#home").onclick=home;$("#teacher").onclick=teacherGate}
+function results(){save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)}의 결과</h1><div class="metrics"><div class="metric"><span>SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div><table><tr><th>문제</th><th>유형</th><th>점수</th></tr>${S.answers.map(a=>`<tr><td>Q${a.q}</td><td>${a.type}</td><td>+${a.points}${a.speechScore!=null?` (발음 ${a.speechScore})`:""}</td></tr>`).join("")}</table><div class="actions"><button class="btn" id="home">처음으로</button></div></div>`);$("#home").onclick=home}
 function save(){let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString()});localStorage.setItem("LQ_results",JSON.stringify(r))}
 function teacher(){
  let results=JSON.parse(localStorage.getItem("LQ_results")||"[]");
@@ -110,7 +125,31 @@ function editor(){
 }
 function shuffle(a){for(let i=a.length-1;i>0;i--){let j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
 function report(r){
- let avg=r.length?Math.round(r.reduce((s,x)=>s+x.correct/x.total*100,0)/r.length):0;
- $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER REPORT</span><h2>학습 리포트</h2><div class="metrics"><div class="metric"><span>플레이 기록</span><b>${r.length}</b></div><div class="metric"><span>평균 정답률</span><b>${avg}%</b></div><div class="metric"><span>저장 방식</span><b>Local</b></div></div>${r.length?`<table><tr><th>학급</th><th>이름</th><th>캐릭터</th><th>점수</th><th>정답률</th></tr>${r.map(x=>`<tr><td>${esc(x.student.className)}</td><td>${esc(x.student.name)}</td><td>${PETS[x.student.pet]?.name||"-"}</td><td>${x.score}</td><td>${Math.round(x.correct/x.total*100)}%</td></tr>`).join("")}</table>`:`<p class="sub">아직 이 기기에 저장된 플레이 결과가 없습니다.</p>`}<p class="note">현재는 같은 브라우저에만 데이터가 저장됩니다. Supabase 연결 후에는 교사가 수정한 문제와 학생 결과를 모든 기기에서 공유할 수 있습니다.</p></div>`;
+ const classes=[...Array(11)].map((_,i)=>`2학년 ${i+1}반`);
+ const classCounts=classes.map(c=>({c,n:r.filter(x=>x.student.className===c).length}));
+ const tabs=`<div class="class-tabs"><button class="class-filter active" data-class="all">전체</button>${classes.map(c=>`<button class="class-filter" data-class="${c}">${c.replace("2학년 ","")}</button>`).join("")}</div>`;
+ $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER REPORT</span><h2>학습 리포트</h2>
+ <p class="sub">전체 현황 또는 반별 현황을 선택해서 확인할 수 있습니다.</p>${tabs}<div id="classReport"></div></div>`;
+ function draw(cls){
+   const data=cls==="all"?r:r.filter(x=>x.student.className===cls);
+   const avg=data.length?Math.round(data.reduce((s,x)=>s+x.correct/x.total*100,0)/data.length):0;
+   const avgScore=data.length?Math.round(data.reduce((s,x)=>s+x.score,0)/data.length):0;
+   const speak=data.flatMap(x=>x.answers||[]).map(a=>a.speechScore).filter(v=>v!=null);
+   const speakAvg=speak.length?Math.round(speak.reduce((a,b)=>a+b,0)/speak.length):"-";
+   const latest={};
+   data.forEach(x=>{const k=x.student.className+"|"+x.student.name;if(!latest[k]||new Date(x.date)>new Date(latest[k].date))latest[k]=x});
+   const students=Object.values(latest).sort((a,b)=>b.score-a.score);
+   $("#classReport").innerHTML=`<div class="metrics">
+     <div class="metric"><span>${cls==="all"?"전체 참여 기록":"참여 기록"}</span><b>${data.length}</b></div>
+     <div class="metric"><span>평균 정답률</span><b>${avg}%</b></div>
+     <div class="metric"><span>평균 점수</span><b>${avgScore}</b></div>
+   </div>
+   ${cls==="all"?`<h3>반별 현황</h3><div class="class-summary">${classCounts.map(x=>{let cr=r.filter(y=>y.student.className===x.c);let ca=cr.length?Math.round(cr.reduce((s,y)=>s+y.correct/y.total*100,0)/cr.length):0;return `<div class="class-card"><b>${x.c}</b><span>${x.n}회 참여</span><strong>${ca}%</strong><small>평균 정답률</small></div>`}).join("")}</div>`:""}
+   <h3>${cls==="all"?"학생별 최근 기록":cls+" 학생 현황"}</h3>
+   ${students.length?`<table><tr><th>학급</th><th>이름</th><th>캐릭터</th><th>점수</th><th>정답률</th><th>Speaking</th></tr>${students.map(x=>{let ss=(x.answers||[]).map(a=>a.speechScore).filter(v=>v!=null);return `<tr><td>${esc(x.student.className)}</td><td>${esc(x.student.name)}</td><td>${PETS[x.student.pet]?.name||"-"}</td><td>${x.score}</td><td>${Math.round(x.correct/x.total*100)}%</td><td>${ss.length?Math.round(ss.reduce((a,b)=>a+b,0)/ss.length)+"점":"-"}</td></tr>`}).join("")}</table>`:`<div class="empty-report">아직 이 반의 플레이 기록이 없습니다.</div>`}
+   <p class="note">Speaking 평균: ${speakAvg}${speakAvg==="-"?"":"점"} · 현재 데이터는 이 브라우저에 저장된 기록 기준입니다.</p>`;
+ }
+ document.querySelectorAll(".class-filter").forEach(b=>b.onclick=()=>{document.querySelectorAll(".class-filter").forEach(x=>x.classList.remove("active"));b.classList.add("active");draw(b.dataset.class)});
+ draw("all");
 }
 home();

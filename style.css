@@ -26,3 +26,18 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 
 .teacher-icon{display:block;margin:14px 0 0 auto;width:38px;height:38px;border:1px solid var(--line);border-radius:50%;background:#f8fafc;color:#6b7280;font-size:16px;opacity:.65}
 .teacher-icon:hover{opacity:1;background:#eef2ff}
+
+.playgrid{display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:14px;align-items:start}
+.ranking{background:#fff;border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 12px 30px #312e8110;position:sticky;top:12px}
+.ranktitle{font-size:12px;font-weight:950;margin-bottom:9px;color:#5b21b6}.rankrow{display:grid;grid-template-columns:25px 1fr auto;gap:6px;align-items:center;padding:9px 5px;border-bottom:1px solid #f1f2f5;font-size:12px}.rankrow:last-child{border-bottom:0}.rankrow b{color:#8b5cf6}.rankrow strong{font-size:11px}.rankrow.me{background:#f5f3ff;border-radius:9px}
+.evo-toast{position:fixed;inset:0;z-index:9999;background:#17192355;display:flex;align-items:center;justify-content:center;opacity:0;transition:.16s;pointer-events:none}.evo-toast.show{opacity:1}.evo-pop{background:white;border-radius:26px;padding:30px 42px;text-align:center;box-shadow:0 24px 70px #0003;transform:scale(.8);transition:.18s}.evo-toast.show .evo-pop{transform:scale(1)}.evo-big{font-size:78px;line-height:1}.evo-pop b{display:block;font-size:25px;margin-top:12px}.evo-pop span{display:block;color:var(--p);font-weight:950;font-size:12px;margin-top:7px}
+@media(max-width:760px){.playgrid{grid-template-columns:1fr}.ranking{position:static;order:-1}.rankrow:nth-child(n+4){display:none}}
+
+.class-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0}
+.class-filter{border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 11px;font-size:12px;font-weight:850}
+.class-filter.active{background:var(--p);border-color:var(--p);color:white}
+.class-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:10px 0 22px}
+.class-card{border:1px solid var(--line);border-radius:14px;padding:13px;display:grid;gap:3px}
+.class-card b{font-size:13px}.class-card span,.class-card small{font-size:10px;color:var(--muted)}.class-card strong{font-size:22px;color:var(--p)}
+.empty-report{padding:24px;text-align:center;background:#f8fafc;border-radius:14px;color:var(--muted);margin:10px 0}
+@media(max-width:720px){.class-summary{grid-template-columns:repeat(2,1fr)}.class-tabs{gap:4px}.class-filter{padding:7px 9px}}
