@@ -51,3 +51,19 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 .timeup-card{background:white;border-radius:24px;padding:30px 38px;text-align:center;box-shadow:0 24px 70px #0003}.timeup-icon{font-size:62px}.timeup-card h2{margin:8px 0}.timeup-card p{color:var(--muted);margin:0}
 
 .stamp-win{text-align:center}.stamp-emoji{font-size:84px;line-height:1;margin-bottom:10px}.stamp-box{margin:22px auto 10px;max-width:430px;padding:22px;border:2px dashed #8b5cf6;border-radius:18px;background:#f5f3ff;font-size:18px;line-height:1.7;color:#4c1d95}.stamp-box b{font-size:21px}
+
+.student-rank .rankrow:nth-of-type(n+5){display:none}
+.my-rank-divider{border-top:2px dashed #e5e7eb;margin:8px 0}
+
+.mini-timebar{display:flex;justify-content:space-between;align-items:center;border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;border-radius:14px;padding:10px 13px;margin:12px 0 16px;font-weight:900}
+.mini-timebar b{font-size:20px}.mini-timebar.urgent{background:#fff1f2;border-color:#fecdd3;color:#be123c;animation:timerPulse 1s infinite}
+.mini-finish{text-align:center}
+
+.waiting-screen{text-align:center}.waiting-icon{font-size:76px}.waiting-dots{display:flex;justify-content:center;gap:8px;margin:24px 0}
+.waiting-dots span{width:10px;height:10px;border-radius:50%;background:var(--p);animation:waitDot 1.2s infinite}
+.waiting-dots span:nth-child(2){animation-delay:.15s}.waiting-dots span:nth-child(3){animation-delay:.3s}
+@keyframes waitDot{0%,80%,100%{transform:scale(.7);opacity:.4}40%{transform:scale(1.15);opacity:1}}
+.final-result-card{text-align:center}.podium{display:grid;gap:10px;margin:22px 0}.podium-row{display:grid;grid-template-columns:70px 1fr auto;align-items:center;text-align:left;border:1px solid var(--line);border-radius:14px;padding:13px 15px}
+.rank-1{background:#fffbeb}.rank-2{background:#f8fafc}.rank-3{background:#fff7ed}
+.my-final{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px}.my-final>div{border:1px solid var(--line);border-radius:14px;padding:16px}.my-final span{display:block;font-size:11px;color:var(--muted);font-weight:800}.my-final b{display:block;font-size:24px;margin-top:5px;color:var(--p)}
+@media(max-width:700px){.my-final{grid-template-columns:1fr}.podium-row{grid-template-columns:55px 1fr auto}}

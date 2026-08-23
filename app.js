@@ -67,23 +67,16 @@ function startCountdown(){
  tick();S.timerId=setInterval(tick,500);
 }
 function handleTimeUp(){
- if(document.querySelector(".timeup-overlay"))return;
- const ov=document.createElement("div");ov.className="timeup-overlay";
- ov.innerHTML=`<div class="timeup-card"><div class="timeup-icon">⏰</div><h2>시간 종료!</h2><p>현재 문제까지만 마치고 대기 미니게임으로 이동해요.</p></div>`;
- document.body.appendChild(ov);setTimeout(()=>ov.remove(),1200);
+ if(S.timeExpired)return;
  S.timeExpired=true;
+ try{if(S.recognizing&&S.rec)S.rec.stop()}catch(e){}
+ const ov=document.createElement("div");ov.className="timeup-overlay";
+ ov.innerHTML=`<div class="timeup-card"><div class="timeup-icon">⏰</div><h2>시간 종료!</h2><p>순위 발표 대기 화면으로 이동합니다.</p></div>`;
+ document.body.appendChild(ov);
+ setTimeout(()=>{ov.remove();waitForRankingScreen();},900);
 }
 function rankingRows(){
- const sid=S.sessionId;
- let rows=JSON.parse(localStorage.getItem("LQ_live_session")||"[]")
-   .filter(x=>x.sessionId===sid)
-   .map(x=>({name:x.name,className:x.className,score:x.score,updatedAt:x.updatedAt}));
- if(S.student){
-   rows=rows.filter(x=>!(x.name===S.student.name && x.className===S.student.className));
-   rows.push({name:S.student.name,className:S.student.className,score:S.score,current:true,updatedAt:Date.now()});
- }
- rows.sort((a,b)=>b.score-a.score || a.updatedAt-b.updatedAt);
- return rows.slice(0,5);
+ return allSessionRankingRows().slice(0,5);
 }
 function updateLiveSession(){
  if(!S.student||!S.sessionId)return;
@@ -120,9 +113,9 @@ function chrome(inner){
  let pi=petInfo(), pct=S.q/S.playQuestions.length*100;
  layout(`<div class="petbar"><div class="petemoji">${pi.emoji}</div><div class="evo"><b>${pi.name}</b> · ${S.score}점<div class="evoline"><div style="width:${pi.pct}%"></div></div><span class="note">${pi.i<2?`다음 진화까지 ${Math.max(0,pi.next-S.score)}점`:"최종 진화 완료!"}</span></div></div>
  <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${S.playQuestions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats">${timerHTML()}<div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
- <div class="playgrid"><div class="card">${inner}</div>${rankingHTML()}</div>`);startCountdown();
+ <div class="playgrid"><div class="card">${inner}</div>${studentRankingHTML()}</div>`);startCountdown();
 }
-function question(){if(S.timeExpired||remainingMs()<=0){S.timeExpired=true;return results();}S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
+function question(){if(S.timeExpired||remainingMs()<=0){S.timeExpired=true;return waitForRankingScreen();}S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
 function choice(q){chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title).replace(/\n/g,"<br>")}</div>${q.options.map(o=>`<button class="option ${S.selected===o?"sel":""}" data-o="${esc(o)}">${esc(o)}</button>`).join("")}<div class="actions"><button class="btn" id="check">CHECK</button></div>`);
  document.querySelectorAll(".option").forEach(b=>b.onclick=()=>{S.selected=b.dataset.o;choice(q)});$("#check").onclick=()=>{if(!S.selected)return alert("답을 골라 주세요.");finish(S.selected===q.answer,S.selected)}
 }
@@ -166,19 +159,41 @@ function finishSpeech(){
  S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});updateLiveSession();
  let after=stage(S.score);if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);setTimeout(next,1050);}else next();
 }
-function next(){S.q++;S.recognizing=false;if(S.timeExpired||remainingMs()<=0||S.q>=S.playQuestions.length)results();else question()}
+function next(){S.q++;S.recognizing=false;if(S.timeExpired||remainingMs()<=0)waitForRankingScreen();else if(S.q>=S.playQuestions.length)results();else question()}
 function results(){
  clearInterval(S.timerId);S.timerId=null;save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);
  layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)} 완료!</h1>
  <div class="metrics"><div class="metric"><span>FINAL SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div>
- <p class="sub">본 게임은 끝났어요. 이제 순위 발표를 기다리면서 미니게임을 즐겨보세요! 미니게임 점수는 LIVE RANKING에 영향을 주지 않습니다.</p>
- <button class="btn full" id="miniStart">🎮 단어 뜻 맞추기 시작</button>
- <div style="margin-top:15px">${rankingHTML()}</div></div>`);
- $("#miniStart").onclick=()=>startMiniGame();
+ <p class="sub">본 게임은 끝났어요. 남은 시간 동안 미니게임을 즐겨보세요! 미니게임 점수는 LIVE RANKING에 영향을 주지 않습니다.</p>
+ ${miniTimerHTML()}
+ <button class="btn full" id="miniStart" ${remainingMs()<=0?"disabled":""}>🎮 단어 뜻 맞추기 시작</button>
+ </div>`);
+ if(remainingMs()<=0){setTimeout(waitForRankingScreen,300);return}
+ startMiniCountdown();$("#miniStart").onclick=()=>startMiniGame();
 }
 let miniState={index:0,score:0,streak:0,order:[],direction:"en-ko"};
+
+function miniTimerHTML(){
+ const ms=remainingMs();
+ return `<div class="mini-timebar"><span>⏱ 남은 시간</span><b id="miniCountdown">${formatTime(ms)}</b></div>`;
+}
+function startMiniCountdown(){
+ clearInterval(S.timerId);
+ const tick=()=>{
+   const ms=remainingMs(), el=document.querySelector("#miniCountdown");
+   if(el){el.textContent=formatTime(ms);el.closest(".mini-timebar")?.classList.toggle("urgent",ms<=60000);}
+   if(ms<=0){clearInterval(S.timerId);S.timerId=null;miniTimeUp();}
+ };
+ tick();S.timerId=setInterval(tick,500);
+}
+function miniTimeUp(){
+ if(S.timeExpired)return;
+ S.timeExpired=true;
+ waitForRankingScreen();
+}
 function startMiniGame(){
- if(!miniWords.length){layout(`<div class="card hero"><h2>순위 발표를 기다려 주세요 🏆</h2><p class="sub">교사가 아직 단어장을 등록하지 않았습니다.</p>${rankingHTML()}</div>`);return}
+ if(remainingMs()<=0)return miniTimeUp();
+ if(!miniWords.length){layout(`<div class="card hero"><h2>순위 발표를 기다려 주세요 🏆</h2>${miniTimerHTML()}<p class="sub">교사가 아직 단어장을 등록하지 않았습니다.</p></div>`);startMiniCountdown();return}
  miniState={index:0,score:0,streak:0,order:shuffle([...miniWords]),direction:"en-ko"};renderMini();
 }
 function makeDistractors(correct,key){
@@ -186,31 +201,33 @@ function makeDistractors(correct,key){
  return shuffle([...new Set(pool)]).slice(0,3);
 }
 function renderMini(){
+ if(remainingMs()<=0)return miniTimeUp();
  if(miniState.index>0 && miniState.index%miniState.order.length===0)miniState.order=shuffle([...miniWords]);
  let w=miniState.order[miniState.index%miniState.order.length];
  let enToKo=miniState.index%2===0, prompt=enToKo?w.en:w.ko, correct=enToKo?w.ko:w.en, key=enToKo?"ko":"en";
  let wrong=makeDistractors(correct,key), opts=shuffle([correct,...wrong]);
- layout(`<div class="playgrid"><div class="card"><span class="badge">WAITING MINI GAME</span><div class="round">${enToKo?"ENGLISH → KOREAN":"KOREAN → ENGLISH"}</div>
+ layout(`<div><div class="card"><span class="badge">WAITING MINI GAME</span>${miniTimerHTML()}<div class="round">${enToKo?"ENGLISH → KOREAN":"KOREAN → ENGLISH"}</div>
  <div class="prompt" style="font-size:38px;text-align:center">${esc(prompt)}</div><p class="sub" style="text-align:center">${enToKo?"알맞은 한국어 뜻을 고르세요.":"알맞은 영어 단어를 고르세요."}</p>
  ${opts.map(o=>`<button class="option" data-mini="${esc(o)}">${esc(o)}</button>`).join("")}
  <div class="stats" style="margin-top:15px"><div class="pill">🎮 MINI ${miniState.score}</div><div class="pill">🔥 ${miniState.streak}</div><div class="pill">📚 ${miniWords.length} words</div></div>
- <p class="note">영→한 / 한→영이 번갈아 계속 출제됩니다. 미니게임 점수는 본 게임 랭킹에 반영되지 않습니다.</p></div>${rankingHTML()}</div>`);
- document.querySelectorAll("[data-mini]").forEach(b=>b.onclick=()=>{let ok=b.dataset.mini===correct;if(ok){miniState.score+=10;miniState.streak++}else miniState.streak=0;b.classList.add(ok?"mini-ok":"mini-bad");document.querySelectorAll("[data-mini]").forEach(x=>x.disabled=true);
+ <p class="note">영→한 / 한→영이 번갈아 계속 출제됩니다. 미니게임 점수는 본 게임 랭킹에 반영되지 않습니다.</p></div></div>`);
+ startMiniCountdown();
+ document.querySelectorAll("[data-mini]").forEach(b=>b.onclick=()=>{if(remainingMs()<=0)return miniTimeUp();let ok=b.dataset.mini===correct;if(ok){miniState.score+=10;miniState.streak++}else miniState.streak=0;b.classList.add(ok?"mini-ok":"mini-bad");document.querySelectorAll("[data-mini]").forEach(x=>x.disabled=true);
    if(ok && miniState.streak>=30){setTimeout(()=>miniStampWin(),500);}
    else setTimeout(()=>{miniState.index++;renderMini()},650);
  });
 }
 function miniStampWin(){
- layout(`<div class="card hero stamp-win"><div class="stamp-emoji">🏅</div><span class="badge">MISSION COMPLETE</span><h1>도장 하나 획득!</h1>
+ clearInterval(S.timerId);S.timerId=null;layout(`<div class="card hero stamp-win"><div class="stamp-emoji">🏅</div><span class="badge">MISSION COMPLETE</span><h1>도장 하나 획득!</h1>
  <p class="sub"><b>30개 연속 정답</b>을 달성했어요.</p>
  <div class="stamp-box">선생님께 화면을 보여드리고<br><b>도장판에 도장 1개를 받으세요!</b></div>
  <p class="note">이 화면은 선생님께 확인받기 전까지 닫지 마세요.</p></div>`);
 }
-function save(){let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
+function save(){updateLiveSession();let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
 function teacher(){
  let results=JSON.parse(localStorage.getItem("LQ_results")||"[]");
- layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="sessionTab">🏁 게임 설정</button><button class="tab" id="miniTab">🎮 미니게임 편집</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
- $("#editTab").onclick=()=>editor();$("#reportTab").onclick=()=>report(results);$("#sessionTab").onclick=()=>sessionManager();$("#miniTab").onclick=()=>miniEditor();$("#studentTab").onclick=home;editor();
+ layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="sessionTab">🏁 게임 설정</button><button class="tab" id="miniTab">🎮 미니게임 편집</button><button class="tab" id="rankingTab">🏆 랭킹 관리</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
+ $("#editTab").onclick=()=>editor();$("#reportTab").onclick=()=>report(results);$("#sessionTab").onclick=()=>sessionManager();$("#miniTab").onclick=()=>miniEditor();$("#rankingTab").onclick=()=>rankingManager();$("#studentTab").onclick=home;editor();
 }
 
 function sessionManager(){
@@ -227,8 +244,28 @@ function sessionManager(){
    let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}");
    active[cls]={id:`${cls}-${now}`,startedAt:now,endsAt:now+minutes*60000,minutes};
    localStorage.setItem("LQ_active_sessions",JSON.stringify(active));
+   localStorage.setItem("LQ_ranking_settings",JSON.stringify({visible:false,published:false,sessionId:active[cls].id}));
    $("#sessionMsg").innerHTML=`✓ <b>${esc(cls)}</b> · <b>${minutes}분</b> 게임 세션이 시작되었습니다.`;
  };
+}
+
+function rankingManager(){
+ let sid=S.sessionId;
+ if(!sid){
+   const active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}");
+   const vals=Object.values(active).filter(Boolean);
+   const last=vals[vals.length-1];
+   sid=typeof last==="string"?last:last?.id;
+ }
+ $("#panel").innerHTML=`<div class="card"><span class="badge">RANKING CONTROL</span><h2>랭킹 관리</h2>
+ <p class="sub">학생들은 시간이 끝나면 순위 발표 대기 화면으로 이동합니다. 아래 버튼을 누르면 학생들에게 최종 결과가 공개됩니다.</p>
+ <div class="editor"><div class="actions" style="justify-content:flex-start;flex-wrap:wrap">
+ <button class="btn" id="publishRanking">🏆 랭킹 발표</button>
+ <button class="btn secondary" id="resetRankingPublish">발표 상태 초기화</button></div>
+ <p class="note">현재 세션: ${esc(sid||"없음")}</p></div>
+ <div id="teacherFullRanking">${teacherRankingHTML()}</div></div>`;
+ $("#publishRanking").onclick=()=>{if(!sid)return alert("현재 게임 세션이 없습니다.");localStorage.setItem("LQ_ranking_settings",JSON.stringify({visible:true,published:true,sessionId:sid}));alert("랭킹을 발표했습니다.");rankingManager();};
+ $("#resetRankingPublish").onclick=()=>{localStorage.setItem("LQ_ranking_settings",JSON.stringify({visible:false,published:false,sessionId:sid||null}));alert("랭킹 발표 상태를 초기화했습니다.");rankingManager();};
 }
 function miniEditor(){
  $("#panel").innerHTML=`<div class="card"><span class="badge">VOCABULARY SHEET</span><h2>엑셀 단어장 업로드</h2>
