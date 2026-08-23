@@ -27,21 +27,35 @@ function teacherGate(){
  else if(pass===saved)teacher(); else alert("비밀번호가 올바르지 않습니다.");
 }
 let questions=JSON.parse(localStorage.getItem("LQ_questions")||"null")||DEFAULT;
-let S={student:null,q:0,score:0,combo:0,correct:0,answers:[],selected:null,order:[],transcript:"",speechScore:null,recognizing:false,rec:null};
+let S={student:null,q:0,score:0,combo:0,correct:0,answers:[],selected:null,order:[],transcript:"",speechScore:null,recognizing:false,rec:null,questionStartedAt:null,sessionId:null};
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
 function layout(x){app.innerHTML=`<div class="shell"><div class="top"><div class="brand">Listening <b>Quest</b> <small>v2</small></div></div>${x}</div>`}
-function stage(score){return score>=500?2:score>=250?1:0}
+function stage(score){return score>=1200?2:score>=600?1:0}
 function petInfo(){
- let p=PETS[S.student.pet],i=stage(S.score),next=i===0?250:i===1?500:500,base=i===0?0:i===1?250:500;
+ let p=PETS[S.student.pet],i=stage(S.score),next=i===0?600:i===1?1200:1200,base=i===0?0:i===1?600:1200;
  return {p,i,emoji:p.stages[i][0],name:p.stages[i][1],pct:i===2?100:Math.min(100,(S.score-base)/(next-base)*100),next};
 }
 
 function rankingRows(){
- let rows=JSON.parse(localStorage.getItem("LQ_results")||"[]").map(x=>({name:x.student.name,className:x.student.className,score:x.score}));
- if(S.student) rows.push({name:S.student.name,className:S.student.className,score:S.score,current:true});
- rows.sort((a,b)=>b.score-a.score);
+ const sid=S.sessionId;
+ let rows=JSON.parse(localStorage.getItem("LQ_live_session")||"[]")
+   .filter(x=>x.sessionId===sid)
+   .map(x=>({name:x.name,className:x.className,score:x.score,updatedAt:x.updatedAt}));
+ if(S.student){
+   rows=rows.filter(x=>!(x.name===S.student.name && x.className===S.student.className));
+   rows.push({name:S.student.name,className:S.student.className,score:S.score,current:true,updatedAt:Date.now()});
+ }
+ rows.sort((a,b)=>b.score-a.score || a.updatedAt-b.updatedAt);
  return rows.slice(0,5);
 }
+function updateLiveSession(){
+ if(!S.student||!S.sessionId)return;
+ let rows=JSON.parse(localStorage.getItem("LQ_live_session")||"[]");
+ rows=rows.filter(x=>!(x.sessionId===S.sessionId && x.name===S.student.name && x.className===S.student.className));
+ rows.push({sessionId:S.sessionId,name:S.student.name,className:S.student.className,score:S.score,updatedAt:Date.now()});
+ localStorage.setItem("LQ_live_session",JSON.stringify(rows));
+}
+
 function rankingHTML(){
  let rows=rankingRows();
  return `<div class="ranking"><div class="ranktitle">🏆 LIVE RANKING</div>${rows.length?rows.map((r,i)=>`<div class="rankrow ${r.current?"me":""}"><b>${i+1}</b><span>${esc(r.name)}</span><strong>${r.score}</strong></div>`).join(""):`<div class="note">첫 번째 플레이어예요!</div>`}</div>`;
@@ -55,9 +69,14 @@ function home(){
  <div class="grid2"><div><label>학급</label><select id="cls">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>이름</label><input id="nm" placeholder="이름"></div></div>
  <label>캐릭터 선택</label><div class="chars">${Object.entries(PETS).map(([k,p],i)=>`<button class="char ${i===0?"sel":""}" data-p="${k}"><div class="emoji">${p.stages[0][0]}</div><b>${p.name}</b><span class="note">${p.stages.map(x=>x[1]).join(" → ")}</span></button>`).join("")}</div>
  <button class="btn full" id="go">GAME START →</button><button class="teacher-icon" id="teacher" title="교사용">⚙️</button>
- <p class="note">진화 기준: 250점 / 500점 · 정답 기본 점수: 100점 · 콤보 보너스: 최대 50점</p></div>`);
+ <p class="note">진화 기준: 600점 / 1,200점 · 정답 기본 점수: 100점 · 콤보 보너스: 최대 50점</p></div>`);
  let pet="chicken";document.querySelectorAll(".char").forEach(b=>b.onclick=()=>{pet=b.dataset.p;document.querySelectorAll(".char").forEach(x=>x.classList.remove("sel"));b.classList.add("sel")});
- $("#go").onclick=()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");let aq=activeQuestions();if(!aq.length)return alert("교사가 아직 문제를 등록하지 않았습니다.");questions=questions;S={...S,student:{name,className:$("#cls").value,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq};question()};
+ $("#go").onclick=()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");let aq=activeQuestions();if(!aq.length)return alert("교사가 아직 문제를 등록하지 않았습니다.");
+ let cls=$("#cls").value;
+ let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}");
+ let sid=active[cls]||(`${cls}-${Date.now()}`);
+ if(!active[cls]){active[cls]=sid;localStorage.setItem("LQ_active_sessions",JSON.stringify(active));}
+ questions=questions;S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:sid};updateLiveSession();question()};
  $("#teacher").onclick=teacherGate;
 }
 function chrome(inner){
@@ -66,17 +85,25 @@ function chrome(inner){
  <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${S.playQuestions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats"><div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
  <div class="playgrid"><div class="card">${inner}</div>${rankingHTML()}</div>`);
 }
-function question(){S.selected=null;S.transcript="";S.speechScore=null;let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
+function question(){S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
 function choice(q){chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title).replace(/\n/g,"<br>")}</div>${q.options.map(o=>`<button class="option ${S.selected===o?"sel":""}" data-o="${esc(o)}">${esc(o)}</button>`).join("")}<div class="actions"><button class="btn" id="check">CHECK</button></div>`);
  document.querySelectorAll(".option").forEach(b=>b.onclick=()=>{S.selected=b.dataset.o;choice(q)});$("#check").onclick=()=>{if(!S.selected)return alert("답을 골라 주세요.");finish(S.selected===q.answer,S.selected)}
 }
 function order(q){chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title)}</div>${S.order.map((x,i)=>`<div class="order"><span>${i+1}. ${esc(x)}</span><div><button class="icon" data-u="${i}">↑</button> <button class="icon" data-d="${i}">↓</button></div></div>`).join("")}<div class="actions"><button class="btn" id="check">CHECK</button></div>`);
  document.querySelectorAll("[data-u]").forEach(b=>b.onclick=()=>mv(+b.dataset.u,-1,q));document.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>mv(+b.dataset.d,1,q));$("#check").onclick=()=>finish(JSON.stringify(S.order)===JSON.stringify(q.answer),S.order.join(" | "))}
 function mv(i,d,q){let j=i+d;if(j<0||j>=S.order.length)return;[S.order[i],S.order[j]]=[S.order[j],S.order[i]];order(q)}
+function speedBonus(){
+ const sec=Math.max(0,(Date.now()-(S.questionStartedAt||Date.now()))/1000);
+ if(sec<=5)return {points:100,label:"⚡ 번개 보너스 +100"};
+ if(sec<=10)return {points:70,label:"⚡ 스피드 보너스 +70"};
+ if(sec<=15)return {points:40,label:"⏱ 빠른 정답 +40"};
+ if(sec<=20)return {points:20,label:"⏱ 시간 보너스 +20"};
+ return {points:0,label:""};
+}
 function finish(ok,response){
- let before=stage(S.score),gain=0;if(ok){S.correct++;S.combo++;gain=100+Math.min(S.combo*10,50);S.score+=gain}else S.combo=0;
- S.answers.push({q:S.q+1,type:S.playQuestions[S.q].type,correct:ok,response,points:gain});
- let after=stage(S.score),msg=ok?`✓ 정답! +${gain}점`:"✕ 아쉬워요. 다음 문제에 도전!";
+ let before=stage(S.score),gain=0,bonus={points:0,label:""};if(ok){S.correct++;S.combo++;bonus=speedBonus();gain=100+bonus.points+Math.min(S.combo*10,50);S.score+=gain}else S.combo=0;
+ S.answers.push({q:S.q+1,type:S.playQuestions[S.q].type,correct:ok,response,points:gain,speedBonus:bonus.points});updateLiveSession();
+ let after=stage(S.score),msg=ok?`✓ 정답! +${gain}점${bonus.label?`<br>${bonus.label}`:""}`:"✕ 아쉬워요. 다음 문제에 도전!";
  $(".card").insertAdjacentHTML("beforeend",`<div class="feedback ${ok?"ok":"bad"}">${msg}</div><div class="actions"><button class="btn" id="next">NEXT →</button></div>`);
  $("#check")?.remove();document.querySelectorAll(".option,.icon").forEach(x=>x.disabled=true);$("#next").onclick=next;if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);}
 }
@@ -97,17 +124,33 @@ function startRec(q){
 }
 function stopRec(q){S.recognizing=false;try{S.rec.stop()}catch(e){};S.speechScore=sim(S.transcript,q.target);setTimeout(()=>speak(q),100)}
 function finishSpeech(){
- let raw=S.speechScore, gain=Math.round(raw*1.2), before=stage(S.score); // 0~120
- S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});
+ let raw=S.speechScore, sb=speedBonus(), before=stage(S.score);
+ let gain=Math.round(raw)+(raw>=70?Math.round(sb.points*0.5):0); // 발음 정확도가 중심, 빠른 성공은 최대 +50
+ S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});updateLiveSession();
  let after=stage(S.score);if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);setTimeout(next,1050);}else next();
 }
 function next(){S.q++;S.recognizing=false;if(S.q>=S.playQuestions.length)results();else question()}
 function results(){save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)}의 결과</h1><div class="metrics"><div class="metric"><span>SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div><table><tr><th>문제</th><th>유형</th><th>점수</th></tr>${S.answers.map(a=>`<tr><td>Q${a.q}</td><td>${a.type}</td><td>+${a.points}${a.speechScore!=null?` (발음 ${a.speechScore})`:""}</td></tr>`).join("")}</table><div class="actions"><button class="btn" id="home">처음으로</button></div></div>`);$("#home").onclick=home}
-function save(){let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString()});localStorage.setItem("LQ_results",JSON.stringify(r))}
+function save(){let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
 function teacher(){
  let results=JSON.parse(localStorage.getItem("LQ_results")||"[]");
- layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
- $("#editTab").onclick=()=>editor();$("#reportTab").onclick=()=>report(results);$("#studentTab").onclick=home;editor();
+ layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="sessionTab">🏁 새 게임 세션</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
+ $("#editTab").onclick=()=>editor();$("#reportTab").onclick=()=>report(results);$("#sessionTab").onclick=()=>sessionManager();$("#studentTab").onclick=home;editor();
+}
+
+function sessionManager(){
+ $("#panel").innerHTML=`<div class="card"><span class="badge">GAME SESSION</span><h2>새 게임 세션 시작</h2>
+ <p class="sub">새 수업을 시작할 때 해당 반의 세션을 초기화하세요. 그러면 이전 게임 점수는 LIVE RANKING에서 제외되고 모두 0점부터 새로 경쟁합니다. 과거 기록은 리포트에 그대로 남습니다.</p>
+ <div class="grid2"><div><label>학급</label><select id="sessionClass">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div>
+ <div style="display:flex;align-items:end"><button class="btn full" id="newSession">🏁 이 반 새 게임 시작</button></div></div>
+ <div id="sessionMsg" class="note" style="margin-top:15px"></div></div>`;
+ $("#newSession").onclick=()=>{
+   const cls=$("#sessionClass").value;
+   let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}");
+   active[cls]=`${cls}-${Date.now()}`;
+   localStorage.setItem("LQ_active_sessions",JSON.stringify(active));
+   $("#sessionMsg").innerHTML=`✓ <b>${esc(cls)}</b>의 새 게임 세션을 만들었습니다. 이전 플레이 점수는 새 랭킹에 포함되지 않습니다.`;
+ };
 }
 function editor(){
  $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2><p class="sub">최대 15문항까지 만들 수 있습니다. 작성하지 않은 문항은 학생에게 표시되지 않습니다.</p>
