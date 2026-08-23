@@ -2,15 +2,30 @@
 const $=s=>document.querySelector(s), app=$("#app");
 const PETS={
  chicken:{name:"닭",stages:[["🥚","알"],["🐣","병아리"],["🐔","닭"]]},
- frog:{name:"개구리",stages:[["🫧","개구리알"],["🐸","올챙이"],["🐸","개구리"]]},
- butterfly:{name:"나비",stages:[["🥚","알"],["🐛","애벌레"],["🦋","나비"]]}
+ cat:{name:"고양이",stages:[["🐾","아기 고양이"],["🐱","꼬마 고양이"],["😺","어른 고양이"]]},
+ dog:{name:"강아지",stages:[["🐾","아기 강아지"],["🐶","꼬마 강아지"],["🐕","어른 강아지"]]},
+ frog:{name:"개구리",stages:[["🫧","개구리알"],["〰️","올챙이"],["🐸","개구리"]]},
+ butterfly:{name:"나비",stages:[["🥚","알"],["🐛","애벌레"],["🦋","나비"]]},
+ penguin:{name:"펭귄",stages:[["🥚","알"],["🐧","아기 펭귄"],["🐧","어른 펭귄"]]},
+ rabbit:{name:"토끼",stages:[["🐾","아기 토끼"],["🐰","꼬마 토끼"],["🐇","어른 토끼"]]}
 };
 const DEFAULT=[
- {type:"order",round:"Dialogue Order",title:"대화문을 자연스러운 순서로 배열하세요.",items:["Sure. What time should we meet?","Do you want to watch a movie?","How about 3 p.m.?","Sounds great!"],answer:["Do you want to watch a movie?","Sure. What time should we meet?","How about 3 p.m.?","Sounds great!"]},
- {type:"choice",round:"Fill in the Blank",title:"I'm going to ______ my grandparents this weekend.",options:["visit","visited","visiting","visits"],answer:"visit"},
- {type:"choice",round:"Missing Line",title:"A: Did you enjoy the concert?\nB: ______\nA: That's too bad.",options:["Yes, it was amazing.","No, I couldn't go.","I listen to music every day.","Let's buy a ticket."],answer:"No, I couldn't go."},
- {type:"speak",round:"Speaking Challenge",title:"문장을 소리 내어 읽어 보세요.",target:"I'd like to return this shirt."}
-];
+ {type:"order",round:"Dialogue Order",title:"대화문을 자연스러운 순서로 배열하세요.",items:["Sure. What time should we meet?","Do you want to watch a movie?","How about 3 p.m.?","Sounds great!"],answer:["Do you want to watch a movie?","Sure. What time should we meet?","How about 3 p.m.?","Sounds great!"],enabled:true},
+ {type:"choice",round:"Fill in the Blank",title:"I'm going to ______ my grandparents this weekend.",options:["visit","visited","visiting","visits"],answer:"visit",enabled:true},
+ {type:"choice",round:"Missing Line",title:"A: Did you enjoy the concert?\nB: ______\nA: That's too bad.",options:["Yes, it was amazing.","No, I couldn't go.","I listen to music every day.","Let's buy a ticket."],answer:"No, I couldn't go.",enabled:true},
+ {type:"speak",round:"Speaking Challenge",title:"문장을 소리 내어 읽어 보세요.",target:"I'd like to return this shirt.",enabled:true},
+ ...Array.from({length:11},()=>({type:"choice",round:"Question",title:"",options:[],answer:"",enabled:false}))
+]
+
+const TEACHER_PASSWORD_KEY="LQ_teacher_password";
+function activeQuestions(){return questions.filter(q=>q.enabled && q.title && (q.type!=="speak" || q.target));}
+function teacherGate(){
+ const saved=localStorage.getItem(TEACHER_PASSWORD_KEY);
+ const pass=prompt(saved?"교사 비밀번호를 입력하세요.":"교사용 비밀번호를 처음 설정하세요. (이 기기에 저장됩니다.)");
+ if(pass===null)return;
+ if(!saved){if(pass.length<4)return alert("비밀번호는 4자 이상으로 설정해 주세요.");localStorage.setItem(TEACHER_PASSWORD_KEY,pass);alert("교사 비밀번호가 설정되었습니다.");teacher();}
+ else if(pass===saved)teacher(); else alert("비밀번호가 올바르지 않습니다.");
+}
 let questions=JSON.parse(localStorage.getItem("LQ_questions")||"null")||DEFAULT;
 let S={student:null,q:0,score:0,combo:0,correct:0,answers:[],selected:null,order:[],transcript:"",speechScore:null,recognizing:false,rec:null};
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
@@ -24,19 +39,19 @@ function home(){
  layout(`<div class="card hero"><span class="badge">🎧 LISTENING QUEST</span><h1>Choose. Play.<br>Grow!</h1><p class="sub">영어 문제를 풀고 점수를 모아 내 캐릭터를 진화시키세요.</p>
  <div class="grid2"><div><label>학급</label><select id="cls">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>이름</label><input id="nm" placeholder="이름"></div></div>
  <label>캐릭터 선택</label><div class="chars">${Object.entries(PETS).map(([k,p],i)=>`<button class="char ${i===0?"sel":""}" data-p="${k}"><div class="emoji">${p.stages[0][0]}</div><b>${p.name}</b><span class="note">${p.stages.map(x=>x[1]).join(" → ")}</span></button>`).join("")}</div>
- <button class="btn full" id="go">GAME START →</button><button class="btn secondary full" style="margin-top:8px" id="teacher">⚙️ 교사용 문제 편집 / 리포트</button>
+ <button class="btn full" id="go">GAME START →</button><button class="teacher-icon" id="teacher" title="교사용">⚙️</button>
  <p class="note">진화 기준: 250점 / 500점 · 정답 기본 점수: 100점 · 콤보 보너스: 최대 50점</p></div>`);
  let pet="chicken";document.querySelectorAll(".char").forEach(b=>b.onclick=()=>{pet=b.dataset.p;document.querySelectorAll(".char").forEach(x=>x.classList.remove("sel"));b.classList.add("sel")});
- $("#go").onclick=()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");S={...S,student:{name,className:$("#cls").value,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null};question()};
- $("#teacher").onclick=teacher;
+ $("#go").onclick=()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");let aq=activeQuestions();if(!aq.length)return alert("교사가 아직 문제를 등록하지 않았습니다.");questions=questions;S={...S,student:{name,className:$("#cls").value,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq};question()};
+ $("#teacher").onclick=teacherGate;
 }
 function chrome(inner){
- let pi=petInfo(), pct=S.q/questions.length*100;
+ let pi=petInfo(), pct=S.q/S.playQuestions.length*100;
  layout(`<div class="petbar"><div class="petemoji">${pi.emoji}</div><div class="evo"><b>${pi.name}</b> · ${S.score}점<div class="evoline"><div style="width:${pi.pct}%"></div></div><span class="note">${pi.i<2?`다음 진화까지 ${Math.max(0,pi.next-S.score)}점`:"최종 진화 완료!"}</span></div></div>
- <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${questions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats"><div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
+ <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${S.playQuestions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats"><div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
  <div class="card">${inner}</div>`);
 }
-function question(){S.selected=null;S.transcript="";S.speechScore=null;let q=questions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
+function question(){S.selected=null;S.transcript="";S.speechScore=null;let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
 function choice(q){chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title).replace(/\n/g,"<br>")}</div>${q.options.map(o=>`<button class="option ${S.selected===o?"sel":""}" data-o="${esc(o)}">${esc(o)}</button>`).join("")}<div class="actions"><button class="btn" id="check">CHECK</button></div>`);
  document.querySelectorAll(".option").forEach(b=>b.onclick=()=>{S.selected=b.dataset.o;choice(q)});$("#check").onclick=()=>{if(!S.selected)return alert("답을 골라 주세요.");finish(S.selected===q.answer,S.selected)}
 }
@@ -45,7 +60,7 @@ function order(q){chrome(`<div class="round">${q.round}</div><div class="prompt"
 function mv(i,d,q){let j=i+d;if(j<0||j>=S.order.length)return;[S.order[i],S.order[j]]=[S.order[j],S.order[i]];order(q)}
 function finish(ok,response){
  let before=stage(S.score),gain=0;if(ok){S.correct++;S.combo++;gain=100+Math.min(S.combo*10,50);S.score+=gain}else S.combo=0;
- S.answers.push({q:S.q+1,type:questions[S.q].type,correct:ok,response,points:gain});
+ S.answers.push({q:S.q+1,type:S.playQuestions[S.q].type,correct:ok,response,points:gain});
  let after=stage(S.score),msg=ok?`✓ 정답! +${gain}점`:"✕ 아쉬워요. 다음 문제에 도전!";
  $(".card").insertAdjacentHTML("beforeend",`<div class="feedback ${ok?"ok":"bad"}">${msg}${after>before?`<br>✨ 캐릭터가 진화했어요! ${petInfo().emoji} ${petInfo().name}`:""}</div><div class="actions"><button class="btn" id="next">NEXT →</button></div>`);
  $("#check")?.remove();document.querySelectorAll(".option,.icon").forEach(x=>x.disabled=true);$("#next").onclick=next;
@@ -71,24 +86,24 @@ function finishSpeech(){
  S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});
  next();
 }
-function next(){S.q++;S.recognizing=false;if(S.q>=questions.length)results();else question()}
-function results(){save();let pi=petInfo(),acc=Math.round(S.correct/questions.length*100);layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)}의 결과</h1><div class="metrics"><div class="metric"><span>SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div><table><tr><th>문제</th><th>유형</th><th>점수</th></tr>${S.answers.map(a=>`<tr><td>Q${a.q}</td><td>${a.type}</td><td>+${a.points}${a.speechScore!=null?` (발음 ${a.speechScore})`:""}</td></tr>`).join("")}</table><div class="actions"><button class="btn secondary" id="home">처음으로</button><button class="btn" id="teacher">교사용 화면</button></div></div>`);$("#home").onclick=home;$("#teacher").onclick=teacher}
-function save(){let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:questions.length,answers:S.answers,date:new Date().toISOString()});localStorage.setItem("LQ_results",JSON.stringify(r))}
+function next(){S.q++;S.recognizing=false;if(S.q>=S.playQuestions.length)results();else question()}
+function results(){save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)}의 결과</h1><div class="metrics"><div class="metric"><span>SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div><table><tr><th>문제</th><th>유형</th><th>점수</th></tr>${S.answers.map(a=>`<tr><td>Q${a.q}</td><td>${a.type}</td><td>+${a.points}${a.speechScore!=null?` (발음 ${a.speechScore})`:""}</td></tr>`).join("")}</table><div class="actions"><button class="btn secondary" id="home">처음으로</button><button class="btn" id="teacher">교사용 화면</button></div></div>`);$("#home").onclick=home;$("#teacher").onclick=teacherGate}
+function save(){let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString()});localStorage.setItem("LQ_results",JSON.stringify(r))}
 function teacher(){
  let results=JSON.parse(localStorage.getItem("LQ_results")||"[]");
  layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
  $("#editTab").onclick=()=>editor();$("#reportTab").onclick=()=>report(results);$("#studentTab").onclick=home;editor();
 }
 function editor(){
- $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2><p class="sub">여기서 대본/문장을 수정하고 저장하면 학생 게임 문제가 자동으로 바뀝니다.</p>
- ${questions.map((q,i)=>`<div class="editor"><div class="row"><div><label>Q${i+1} 유형</label><select data-type="${i}"><option value="order" ${q.type==="order"?"selected":""}>대화 순서</option><option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option><option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option></select></div><div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div></div>
+ $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2><p class="sub">최대 15문항까지 만들 수 있습니다. 작성하지 않은 문항은 학생에게 표시되지 않습니다.</p>
+ ${questions.map((q,i)=>`<div class="editor"><div style="display:flex;justify-content:space-between;align-items:center"><b>Q${i+1}</b><label style="margin:0"><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label></div><div class="row"><div><label>유형</label><select data-type="${i}"><option value="order" ${q.type==="order"?"selected":""}>대화 순서</option><option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option><option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option></select></div><div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div></div>
  ${q.type==="order"?`<label>대화 대본 (한 줄에 한 문장 · 입력 순서가 정답)</label><textarea data-lines="${i}">${esc(q.answer.join("\n"))}</textarea>`:""}
  ${q.type==="choice"?`<label>선택지 (한 줄에 하나)</label><textarea data-options="${i}">${esc(q.options.join("\n"))}</textarea><label>정답</label><input data-answer="${i}" value="${esc(q.answer)}">`:""}
  ${q.type==="speak"?`<label>학생이 읽을 목표 문장</label><input data-target="${i}" value="${esc(q.target)}">`:""}</div>`).join("")}
- <div class="actions"><button class="btn secondary" id="reset">기본 문제 복원</button><button class="btn" id="saveQ">변경사항 저장</button></div><p class="note">대화 순서 문제는 교사가 입력한 줄의 순서를 정답 순서로 저장하고, 학생 화면에서는 자동으로 섞어서 제시합니다.</p></div>`;
+ <div class="actions"><button class="btn secondary" id="reset">기본 문제 복원</button><button class="btn" id="saveQ">변경사항 저장</button></div><p class="note">대화 순서 문제는 입력한 줄 순서가 정답입니다. '학생에게 출제'가 체크되어 있어도 지시문이 비어 있으면 출제되지 않습니다.</p></div>`;
  document.querySelectorAll("[data-type]").forEach(s=>s.onchange=()=>{questions[+s.dataset.type].type=s.value;localStorage.setItem("LQ_questions",JSON.stringify(questions));editor()});
  $("#saveQ").onclick=()=>{
-  questions.forEach((q,i)=>{q.title=document.querySelector(`[data-title="${i}"]`).value;if(q.type==="order"){let a=document.querySelector(`[data-lines="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);q.answer=a;q.items=shuffle([...a])}if(q.type==="choice"){q.options=document.querySelector(`[data-options="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);q.answer=document.querySelector(`[data-answer="${i}"]`).value.trim()}if(q.type==="speak")q.target=document.querySelector(`[data-target="${i}"]`).value.trim()});
+  questions.forEach((q,i)=>{q.title=document.querySelector(`[data-title="${i}"]`).value.trim();q.enabled=document.querySelector(`[data-enabled="${i}"]`).checked && !!q.title;if(q.type==="order"){let a=document.querySelector(`[data-lines="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);q.answer=a;q.items=shuffle([...a])}if(q.type==="choice"){q.options=document.querySelector(`[data-options="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);q.answer=document.querySelector(`[data-answer="${i}"]`).value.trim()}if(q.type==="speak")q.target=document.querySelector(`[data-target="${i}"]`).value.trim()});
   localStorage.setItem("LQ_questions",JSON.stringify(questions));alert("저장되었습니다. 학생 게임에 바로 반영됩니다.");
  };
  $("#reset").onclick=()=>{if(confirm("기본 문제로 되돌릴까요?")){questions=JSON.parse(JSON.stringify(DEFAULT));localStorage.setItem("LQ_questions",JSON.stringify(questions));editor()}};

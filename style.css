@@ -5,7 +5,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.shell{max-width
 .brand{font-size:22px;font-weight:950}.brand b{color:var(--p)}.card{background:#fff;border:1px solid #fff;border-radius:24px;padding:26px;box-shadow:0 18px 45px #312e8117}
 .hero{max-width:760px;margin:4vh auto}.badge{display:inline-block;padding:7px 11px;background:#ede9fe;color:#5b21b6;border-radius:999px;font-weight:900;font-size:12px}
 h1{font-size:clamp(34px,6vw,52px);line-height:1.05;margin:14px 0}h2{margin:8px 0}.sub,.note{color:var(--muted);line-height:1.55}.note{font-size:12px}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chars{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chars{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0}
 .char{border:2px solid var(--line);background:#fff;border-radius:18px;padding:14px;text-align:center}.char.sel{border-color:var(--p);background:#f5f3ff}.char .emoji{font-size:38px}.char b{display:block;margin-top:5px}
 label{font-size:12px;font-weight:900;display:block;margin:8px 0 6px}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:13px;padding:12px;background:white}textarea{min-height:105px;resize:vertical}
 .btn{border:0;border-radius:13px;background:var(--p);color:white;padding:13px 17px;font-weight:900}.btn.full{width:100%}.btn.secondary{background:#eef0f5;color:#111827}.btn.danger{background:#fee2e2;color:#991b1b}.btn.small{padding:8px 10px;font-size:12px}
@@ -23,3 +23,6 @@ label{font-size:12px;font-weight:900;display:block;margin:8px 0 6px}input,select
 .editor{border:1px solid var(--line);border-radius:17px;padding:16px;margin:12px 0}.row{display:grid;grid-template-columns:150px 1fr;gap:10px}.answerline{display:grid;grid-template-columns:1fr auto;gap:7px;margin-top:7px}
 table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}th{font-size:11px;color:var(--muted)}
 @media(max-width:720px){.grid2,.metrics,.gamehead,.row{grid-template-columns:1fr}.chars{grid-template-columns:1fr 1fr}.shell{padding:12px}.card{padding:19px}.prompt{font-size:21px}}
+
+.teacher-icon{display:block;margin:14px 0 0 auto;width:38px;height:38px;border:1px solid var(--line);border-radius:50%;background:#f8fafc;color:#6b7280;font-size:16px;opacity:.65}
+.teacher-icon:hover{opacity:1;background:#eef2ff}
