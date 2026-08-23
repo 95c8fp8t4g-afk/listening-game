@@ -26,6 +26,14 @@ function teacherGate(){
  if(!saved){if(pass.length<4)return alert("비밀번호는 4자 이상으로 설정해 주세요.");localStorage.setItem(TEACHER_PASSWORD_KEY,pass);alert("교사 비밀번호가 설정되었습니다.");teacher();}
  else if(pass===saved)teacher(); else alert("비밀번호가 올바르지 않습니다.");
 }
+const MINI_DEFAULT=[
+ {en:"borrow",ko:"빌리다"},
+ {en:"return",ko:"돌려주다"},
+ {en:"together",ko:"함께"},
+ {en:"concert",ko:"콘서트, 음악회"},
+ {en:"visit",ko:"방문하다"}
+]
+let miniWords=JSON.parse(localStorage.getItem("LQ_mini_words")||"null")||MINI_DEFAULT;
 let questions=JSON.parse(localStorage.getItem("LQ_questions")||"null")||DEFAULT;
 let S={student:null,q:0,score:0,combo:0,correct:0,answers:[],selected:null,order:[],transcript:"",speechScore:null,recognizing:false,rec:null,questionStartedAt:null,sessionId:null};
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
@@ -69,14 +77,14 @@ function home(){
  <div class="grid2"><div><label>학급</label><select id="cls">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>이름</label><input id="nm" placeholder="이름"></div></div>
  <label>캐릭터 선택</label><div class="chars">${Object.entries(PETS).map(([k,p],i)=>`<button class="char ${i===0?"sel":""}" data-p="${k}"><div class="emoji">${p.stages[0][0]}</div><b>${p.name}</b><span class="note">${p.stages.map(x=>x[1]).join(" → ")}</span></button>`).join("")}</div>
  <button class="btn full" id="go">GAME START →</button><button class="teacher-icon" id="teacher" title="교사용">⚙️</button>
- <p class="note">진화 기준: 600점 / 1,200점 · 정답 기본 점수: 100점 · 콤보 보너스: 최대 50점</p></div>`);
+ <p class="note">진화 기준: 600점 / 1,200점 · 정답 기본 점수: 60점 · 속도/콤보 보너스는 소폭 적용</p></div>`);
  let pet="chicken";document.querySelectorAll(".char").forEach(b=>b.onclick=()=>{pet=b.dataset.p;document.querySelectorAll(".char").forEach(x=>x.classList.remove("sel"));b.classList.add("sel")});
  $("#go").onclick=()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");let aq=activeQuestions();if(!aq.length)return alert("교사가 아직 문제를 등록하지 않았습니다.");
  let cls=$("#cls").value;
- let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}");
- let sid=active[cls]||(`${cls}-${Date.now()}`);
- if(!active[cls]){active[cls]=sid;localStorage.setItem("LQ_active_sessions",JSON.stringify(active));}
- questions=questions;S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:sid};updateLiveSession();question()};
+ let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}"), ses=active[cls];
+ if(!ses){let now=Date.now(),settings=JSON.parse(localStorage.getItem("LQ_game_settings")||'{"minutes":15}');ses={id:`${cls}-${now}`,startedAt:now,endsAt:now+settings.minutes*60000,minutes:settings.minutes};active[cls]=ses;localStorage.setItem("LQ_active_sessions",JSON.stringify(active));}
+ if(typeof ses==="string"){let now=Date.now();ses={id:ses,startedAt:now,endsAt:now+15*60000,minutes:15};active[cls]=ses;localStorage.setItem("LQ_active_sessions",JSON.stringify(active));}
+ questions=questions;S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:ses.id,sessionEndsAt:ses.endsAt};updateLiveSession();question()};
  $("#teacher").onclick=teacherGate;
 }
 function chrome(inner){
@@ -94,14 +102,14 @@ function order(q){chrome(`<div class="round">${q.round}</div><div class="prompt"
 function mv(i,d,q){let j=i+d;if(j<0||j>=S.order.length)return;[S.order[i],S.order[j]]=[S.order[j],S.order[i]];order(q)}
 function speedBonus(){
  const sec=Math.max(0,(Date.now()-(S.questionStartedAt||Date.now()))/1000);
- if(sec<=5)return {points:100,label:"⚡ 번개 보너스 +100"};
- if(sec<=10)return {points:70,label:"⚡ 스피드 보너스 +70"};
- if(sec<=15)return {points:40,label:"⏱ 빠른 정답 +40"};
- if(sec<=20)return {points:20,label:"⏱ 시간 보너스 +20"};
+ if(sec<=5)return {points:20,label:"⚡ 번개 보너스 +20"};
+ if(sec<=10)return {points:15,label:"⚡ 스피드 보너스 +15"};
+ if(sec<=15)return {points:10,label:"⏱ 빠른 정답 +10"};
+ if(sec<=20)return {points:5,label:"⏱ 시간 보너스 +5"};
  return {points:0,label:""};
 }
 function finish(ok,response){
- let before=stage(S.score),gain=0,bonus={points:0,label:""};if(ok){S.correct++;S.combo++;bonus=speedBonus();gain=100+bonus.points+Math.min(S.combo*10,50);S.score+=gain}else S.combo=0;
+ let before=stage(S.score),gain=0,bonus={points:0,label:""};if(ok){S.correct++;S.combo++;bonus=speedBonus();gain=60+bonus.points+Math.min(S.combo*5,20);S.score+=gain}else S.combo=0;
  S.answers.push({q:S.q+1,type:S.playQuestions[S.q].type,correct:ok,response,points:gain,speedBonus:bonus.points});updateLiveSession();
  let after=stage(S.score),msg=ok?`✓ 정답! +${gain}점${bonus.label?`<br>${bonus.label}`:""}`:"✕ 아쉬워요. 다음 문제에 도전!";
  $(".card").insertAdjacentHTML("beforeend",`<div class="feedback ${ok?"ok":"bad"}">${msg}</div><div class="actions"><button class="btn" id="next">NEXT →</button></div>`);
@@ -125,32 +133,92 @@ function startRec(q){
 function stopRec(q){S.recognizing=false;try{S.rec.stop()}catch(e){};S.speechScore=sim(S.transcript,q.target);setTimeout(()=>speak(q),100)}
 function finishSpeech(){
  let raw=S.speechScore, sb=speedBonus(), before=stage(S.score);
- let gain=Math.round(raw)+(raw>=70?Math.round(sb.points*0.5):0); // 발음 정확도가 중심, 빠른 성공은 최대 +50
+ let gain=Math.round(raw*0.6)+(raw>=70?Math.round(sb.points*0.5):0); // 발음 정확도가 중심, 빠른 성공은 최대 +50
  S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});updateLiveSession();
  let after=stage(S.score);if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);setTimeout(next,1050);}else next();
 }
 function next(){S.q++;S.recognizing=false;if(S.q>=S.playQuestions.length)results();else question()}
-function results(){save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)}의 결과</h1><div class="metrics"><div class="metric"><span>SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div><table><tr><th>문제</th><th>유형</th><th>점수</th></tr>${S.answers.map(a=>`<tr><td>Q${a.q}</td><td>${a.type}</td><td>+${a.points}${a.speechScore!=null?` (발음 ${a.speechScore})`:""}</td></tr>`).join("")}</table><div class="actions"><button class="btn" id="home">처음으로</button></div></div>`);$("#home").onclick=home}
+function results(){
+ save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);
+ layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)} 완료!</h1>
+ <div class="metrics"><div class="metric"><span>FINAL SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div>
+ <p class="sub">본 게임은 끝났어요. 이제 순위 발표를 기다리면서 미니게임을 즐겨보세요! 미니게임 점수는 LIVE RANKING에 영향을 주지 않습니다.</p>
+ <button class="btn full" id="miniStart">🎮 단어 뜻 맞추기 시작</button>
+ <div style="margin-top:15px">${rankingHTML()}</div></div>`);
+ $("#miniStart").onclick=()=>startMiniGame();
+}
+let miniState={index:0,score:0,streak:0,order:[],direction:"en-ko"};
+function startMiniGame(){
+ if(!miniWords.length){layout(`<div class="card hero"><h2>순위 발표를 기다려 주세요 🏆</h2><p class="sub">교사가 아직 단어장을 등록하지 않았습니다.</p>${rankingHTML()}</div>`);return}
+ miniState={index:0,score:0,streak:0,order:shuffle([...miniWords]),direction:"en-ko"};renderMini();
+}
+function makeDistractors(correct,key){
+ let pool=miniWords.map(w=>w[key]).filter(x=>x&&x!==correct);
+ return shuffle([...new Set(pool)]).slice(0,3);
+}
+function renderMini(){
+ if(miniState.index>0 && miniState.index%miniState.order.length===0)miniState.order=shuffle([...miniWords]);
+ let w=miniState.order[miniState.index%miniState.order.length];
+ let enToKo=miniState.index%2===0, prompt=enToKo?w.en:w.ko, correct=enToKo?w.ko:w.en, key=enToKo?"ko":"en";
+ let wrong=makeDistractors(correct,key), opts=shuffle([correct,...wrong]);
+ layout(`<div class="playgrid"><div class="card"><span class="badge">WAITING MINI GAME</span><div class="round">${enToKo?"ENGLISH → KOREAN":"KOREAN → ENGLISH"}</div>
+ <div class="prompt" style="font-size:38px;text-align:center">${esc(prompt)}</div><p class="sub" style="text-align:center">${enToKo?"알맞은 한국어 뜻을 고르세요.":"알맞은 영어 단어를 고르세요."}</p>
+ ${opts.map(o=>`<button class="option" data-mini="${esc(o)}">${esc(o)}</button>`).join("")}
+ <div class="stats" style="margin-top:15px"><div class="pill">🎮 MINI ${miniState.score}</div><div class="pill">🔥 ${miniState.streak}</div><div class="pill">📚 ${miniWords.length} words</div></div>
+ <p class="note">영→한 / 한→영이 번갈아 계속 출제됩니다. 미니게임 점수는 본 게임 랭킹에 반영되지 않습니다.</p></div>${rankingHTML()}</div>`);
+ document.querySelectorAll("[data-mini]").forEach(b=>b.onclick=()=>{let ok=b.dataset.mini===correct;if(ok){miniState.score+=10;miniState.streak++}else miniState.streak=0;b.classList.add(ok?"mini-ok":"mini-bad");document.querySelectorAll("[data-mini]").forEach(x=>x.disabled=true);setTimeout(()=>{miniState.index++;renderMini()},650)});
+}
 function save(){let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
 function teacher(){
  let results=JSON.parse(localStorage.getItem("LQ_results")||"[]");
- layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="sessionTab">🏁 새 게임 세션</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
- $("#editTab").onclick=()=>editor();$("#reportTab").onclick=()=>report(results);$("#sessionTab").onclick=()=>sessionManager();$("#studentTab").onclick=home;editor();
+ layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="sessionTab">🏁 게임 설정</button><button class="tab" id="miniTab">🎮 미니게임 편집</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
+ $("#editTab").onclick=()=>editor();$("#reportTab").onclick=()=>report(results);$("#sessionTab").onclick=()=>sessionManager();$("#miniTab").onclick=()=>miniEditor();$("#studentTab").onclick=home;editor();
 }
 
 function sessionManager(){
- $("#panel").innerHTML=`<div class="card"><span class="badge">GAME SESSION</span><h2>새 게임 세션 시작</h2>
- <p class="sub">새 수업을 시작할 때 해당 반의 세션을 초기화하세요. 그러면 이전 게임 점수는 LIVE RANKING에서 제외되고 모두 0점부터 새로 경쟁합니다. 과거 기록은 리포트에 그대로 남습니다.</p>
+ const settings=JSON.parse(localStorage.getItem("LQ_game_settings")||'{"minutes":15}');
+ $("#panel").innerHTML=`<div class="card"><span class="badge">GAME SETTINGS</span><h2>수업 게임 설정</h2>
+ <p class="sub">학생에게는 이 설정이 보이지 않습니다. 수업 시작 전에 반과 플레이 시간을 정하고 새 세션을 시작하세요.</p>
  <div class="grid2"><div><label>학급</label><select id="sessionClass">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div>
- <div style="display:flex;align-items:end"><button class="btn full" id="newSession">🏁 이 반 새 게임 시작</button></div></div>
+ <div><label>플레이 시간</label><select id="playMinutes">${[5,10,15,20,25,30,40,45].map(m=>`<option value="${m}" ${settings.minutes===m?"selected":""}>${m}분</option>`).join("")}</select></div></div>
+ <button class="btn full" style="margin-top:12px" id="newSession">🏁 설정 저장 + 새 게임 시작</button>
  <div id="sessionMsg" class="note" style="margin-top:15px"></div></div>`;
  $("#newSession").onclick=()=>{
-   const cls=$("#sessionClass").value;
+   const cls=$("#sessionClass").value, minutes=+$("#playMinutes").value, now=Date.now();
+   localStorage.setItem("LQ_game_settings",JSON.stringify({minutes}));
    let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}");
-   active[cls]=`${cls}-${Date.now()}`;
+   active[cls]={id:`${cls}-${now}`,startedAt:now,endsAt:now+minutes*60000,minutes};
    localStorage.setItem("LQ_active_sessions",JSON.stringify(active));
-   $("#sessionMsg").innerHTML=`✓ <b>${esc(cls)}</b>의 새 게임 세션을 만들었습니다. 이전 플레이 점수는 새 랭킹에 포함되지 않습니다.`;
+   $("#sessionMsg").innerHTML=`✓ <b>${esc(cls)}</b> · <b>${minutes}분</b> 게임 세션이 시작되었습니다.`;
  };
+}
+function miniEditor(){
+ $("#panel").innerHTML=`<div class="card"><span class="badge">VOCABULARY SHEET</span><h2>엑셀 단어장 업로드</h2>
+ <p class="sub">엑셀의 첫 번째 열은 <b>영어</b>, 두 번째 열은 <b>한국어 뜻</b>으로 읽습니다. 헤더가 있어도 자동으로 제외합니다.</p>
+ <div class="editor"><label>단어장 Excel 파일 (.xlsx / .xls)</label><input type="file" id="vocabFile" accept=".xlsx,.xls">
+ <div class="actions"><button class="btn" id="importVocab">엑셀 단어장 불러오기</button></div></div>
+ <div class="metrics"><div class="metric"><span>현재 등록 단어</span><b>${miniWords.length}</b></div><div class="metric"><span>문제 방식</span><b>영↔한</b></div><div class="metric"><span>출제</span><b>계속</b></div></div>
+ <div id="vocabPreview">${vocabPreviewHTML()}</div>
+ <div class="actions"><button class="btn secondary" id="clearVocab">단어장 초기화</button></div>
+ <p class="note">학생 미니게임에서는 영→한, 한→영이 번갈아 출제됩니다. 한 바퀴가 끝나면 단어 순서를 다시 섞어 계속 출제합니다. 미니게임 점수는 본 게임 랭킹에 반영되지 않습니다.</p></div>`;
+ $("#importVocab").onclick=importVocabExcel;
+ $("#clearVocab").onclick=()=>{if(confirm("등록된 단어장을 기본 단어장으로 되돌릴까요?")){miniWords=JSON.parse(JSON.stringify(MINI_DEFAULT));localStorage.setItem("LQ_mini_words",JSON.stringify(miniWords));miniEditor()}};
+}
+function vocabPreviewHTML(){
+ if(!miniWords.length)return `<div class="empty-report">등록된 단어가 없습니다.</div>`;
+ return `<h3>단어 미리보기</h3><table><tr><th>#</th><th>English</th><th>한국어 뜻</th></tr>${miniWords.slice(0,50).map((w,i)=>`<tr><td>${i+1}</td><td>${esc(w.en)}</td><td>${esc(w.ko)}</td></tr>`).join("")}</table>${miniWords.length>50?`<p class="note">처음 50개만 미리 표시합니다. 총 ${miniWords.length}개가 저장되어 있습니다.</p>`:""}`;
+}
+async function importVocabExcel(){
+ const file=$("#vocabFile").files[0];if(!file)return alert("엑셀 파일을 선택해 주세요.");
+ if(typeof XLSX==="undefined")return alert("엑셀 읽기 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.");
+ try{
+   const buf=await file.arrayBuffer(), wb=XLSX.read(buf,{type:"array"}), ws=wb.Sheets[wb.SheetNames[0]];
+   const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+   let pairs=rows.map(r=>({en:String(r[0]||"").trim(),ko:String(r[1]||"").trim()})).filter(x=>x.en&&x.ko);
+   if(pairs.length && /english|영어|word|단어/i.test(pairs[0].en) && /korean|뜻|의미|한국어/i.test(pairs[0].ko))pairs.shift();
+   if(!pairs.length)return alert("첫 번째 열과 두 번째 열에서 단어를 찾지 못했습니다.");
+   miniWords=pairs;localStorage.setItem("LQ_mini_words",JSON.stringify(miniWords));alert(`${pairs.length}개의 단어를 불러왔습니다.`);miniEditor();
+ }catch(e){console.error(e);alert("엑셀 파일을 읽지 못했습니다. 첫 시트의 A열=영어, B열=한국어 뜻인지 확인해 주세요.");}
 }
 function editor(){
  $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2><p class="sub">최대 15문항까지 만들 수 있습니다. 작성하지 않은 문항은 학생에게 표시되지 않습니다.</p>

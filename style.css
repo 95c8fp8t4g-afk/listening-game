@@ -41,3 +41,5 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 .class-card b{font-size:13px}.class-card span,.class-card small{font-size:10px;color:var(--muted)}.class-card strong{font-size:22px;color:var(--p)}
 .empty-report{padding:24px;text-align:center;background:#f8fafc;border-radius:14px;color:var(--muted);margin:10px 0}
 @media(max-width:720px){.class-summary{grid-template-columns:repeat(2,1fr)}.class-tabs{gap:4px}.class-filter{padding:7px 9px}}
+
+.mini-ok{background:#ecfdf5!important;border-color:#16a34a!important;color:#166534}.mini-bad{background:#fef2f2!important;border-color:#dc2626!important;color:#991b1b}
