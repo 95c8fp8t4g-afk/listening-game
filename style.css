@@ -1,0 +1,47 @@
+
+:root{
+  --bg:#f6f7fb;--card:#fff;--text:#171923;--muted:#6b7280;
+  --primary:#6d5dfc;--primary2:#8b7cff;--ok:#16a34a;--bad:#dc2626;
+  --border:#e5e7eb;--shadow:0 16px 40px rgba(35,31,80,.10);
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:linear-gradient(135deg,#f5f3ff,#eef6ff);color:var(--text);min-height:100vh}
+button,input,select{font:inherit}
+button{cursor:pointer}
+.shell{max-width:980px;margin:auto;padding:24px}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.brand{font-weight:900;font-size:22px}.brand span{color:var(--primary)}
+.card{background:rgba(255,255,255,.96);border:1px solid rgba(255,255,255,.8);border-radius:24px;padding:28px;box-shadow:var(--shadow)}
+.hero{max-width:620px;margin:7vh auto}
+.badge{display:inline-block;background:#ede9fe;color:#5b21b6;border-radius:999px;padding:7px 12px;font-weight:800;font-size:13px}
+h1{font-size:clamp(32px,6vw,54px);line-height:1.03;margin:16px 0 12px}
+h2{margin:0 0 8px}.sub{color:var(--muted);line-height:1.6}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:24px 0}
+label{font-size:13px;font-weight:800;display:block;margin-bottom:7px}
+input,select{width:100%;padding:14px 15px;border:1px solid var(--border);border-radius:14px;background:white;outline:none}
+input:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px #ede9fe}
+.btn{border:0;border-radius:14px;padding:14px 18px;font-weight:900;background:var(--primary);color:white}
+.btn:hover{filter:brightness(.97)}.btn.secondary{background:#f3f4f6;color:#111827}.btn.good{background:var(--ok)}
+.btn.full{width:100%}.btn.small{padding:9px 12px;font-size:13px}
+.mode-link{background:none;border:0;color:var(--muted);text-decoration:underline;margin-top:15px}
+.game-head{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;margin-bottom:16px}
+.progress{height:10px;background:#e5e7eb;border-radius:99px;overflow:hidden}.progress>div{height:100%;background:var(--primary);transition:.3s}
+.stats{display:flex;gap:8px;flex-wrap:wrap}.stat{background:white;border:1px solid var(--border);border-radius:12px;padding:8px 11px;font-weight:800;font-size:13px}
+.question-card{min-height:420px}.round{color:var(--primary);font-weight:900;font-size:13px;text-transform:uppercase;letter-spacing:.08em}
+.prompt{font-size:26px;font-weight:900;margin:12px 0 20px;line-height:1.35}
+.option,.order-item{display:block;width:100%;text-align:left;border:1px solid var(--border);background:white;border-radius:15px;padding:15px;margin:9px 0;font-weight:700}
+.option:hover,.order-item:hover{border-color:#c4b5fd;background:#faf9ff}
+.option.selected{border-color:var(--primary);background:#f3f0ff}
+.order-item{display:flex;justify-content:space-between;align-items:center}.order-actions{display:flex;gap:5px}
+.iconbtn{border:0;background:#f3f4f6;border-radius:8px;padding:5px 9px}
+.feedback{margin-top:15px;padding:13px 15px;border-radius:13px;font-weight:800}.feedback.ok{background:#ecfdf5;color:#166534}.feedback.bad{background:#fef2f2;color:#991b1b}
+.footer-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+.speak-box{text-align:center;padding:26px;border:2px dashed #d8d4fe;border-radius:20px;background:#faf9ff}
+.mic{width:86px;height:86px;border-radius:50%;border:0;background:var(--primary);color:white;font-size:34px;box-shadow:0 10px 25px rgba(109,93,252,.25)}
+.transcript{margin-top:15px;min-height:48px;color:#374151}.score-big{font-size:64px;font-weight:950;color:var(--primary)}
+.result-grid,.dashboard-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:20px 0}
+.metric{border:1px solid var(--border);border-radius:16px;padding:18px}.metric b{display:block;font-size:27px;margin-top:4px}.metric span{color:var(--muted);font-size:12px;font-weight:700}
+table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:12px 10px;border-bottom:1px solid var(--border);text-align:left;font-size:14px}th{color:var(--muted);font-size:12px}
+.tabs{display:flex;gap:8px;margin-bottom:18px}.tab{border:0;padding:10px 13px;border-radius:12px;background:#eee}.tab.active{background:var(--primary);color:white}
+.note{font-size:12px;color:var(--muted);line-height:1.5}
+@media(max-width:700px){.grid,.result-grid,.dashboard-grid{grid-template-columns:1fr}.shell{padding:14px}.card{padding:20px}.prompt{font-size:21px}.question-card{min-height:auto}.game-head{grid-template-columns:1fr}.score-big{font-size:48px}}
