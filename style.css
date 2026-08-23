@@ -43,3 +43,11 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 @media(max-width:720px){.class-summary{grid-template-columns:repeat(2,1fr)}.class-tabs{gap:4px}.class-filter{padding:7px 9px}}
 
 .mini-ok{background:#ecfdf5!important;border-color:#16a34a!important;color:#166534}.mini-bad{background:#fef2f2!important;border-color:#dc2626!important;color:#991b1b}
+
+.game-timer{border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;border-radius:12px;padding:8px 10px;font-size:12px;font-weight:950;min-width:92px;text-align:center}
+.game-timer.urgent{background:#fff1f2;border-color:#fecdd3;color:#be123c;animation:timerPulse 1s infinite}
+@keyframes timerPulse{50%{transform:scale(1.04)}}
+.timeup-overlay{position:fixed;inset:0;background:#11182788;display:flex;align-items:center;justify-content:center;z-index:10000}
+.timeup-card{background:white;border-radius:24px;padding:30px 38px;text-align:center;box-shadow:0 24px 70px #0003}.timeup-icon{font-size:62px}.timeup-card h2{margin:8px 0}.timeup-card p{color:var(--muted);margin:0}
+
+.stamp-win{text-align:center}.stamp-emoji{font-size:84px;line-height:1;margin-bottom:10px}.stamp-box{margin:22px auto 10px;max-width:430px;padding:22px;border:2px dashed #8b5cf6;border-radius:18px;background:#f5f3ff;font-size:18px;line-height:1.7;color:#4c1d95}.stamp-box b{font-size:21px}

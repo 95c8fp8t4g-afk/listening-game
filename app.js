@@ -35,7 +35,7 @@ const MINI_DEFAULT=[
 ]
 let miniWords=JSON.parse(localStorage.getItem("LQ_mini_words")||"null")||MINI_DEFAULT;
 let questions=JSON.parse(localStorage.getItem("LQ_questions")||"null")||DEFAULT;
-let S={student:null,q:0,score:0,combo:0,correct:0,answers:[],selected:null,order:[],transcript:"",speechScore:null,recognizing:false,rec:null,questionStartedAt:null,sessionId:null};
+let S={student:null,q:0,score:0,combo:0,correct:0,answers:[],selected:null,order:[],transcript:"",speechScore:null,recognizing:false,rec:null,questionStartedAt:null,sessionId:null,sessionEndsAt:null,timerId:null};
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
 function layout(x){app.innerHTML=`<div class="shell"><div class="top"><div class="brand">Listening <b>Quest</b> <small>v2</small></div></div>${x}</div>`}
 function stage(score){return score>=1200?2:score>=600?1:0}
@@ -44,6 +44,35 @@ function petInfo(){
  return {p,i,emoji:p.stages[i][0],name:p.stages[i][1],pct:i===2?100:Math.min(100,(S.score-base)/(next-base)*100),next};
 }
 
+
+function remainingMs(){
+ return S.sessionEndsAt?Math.max(0,S.sessionEndsAt-Date.now()):0;
+}
+function formatTime(ms){
+ const total=Math.ceil(ms/1000),m=Math.floor(total/60),s=total%60;
+ return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+function timerHTML(){
+ const ms=remainingMs(), urgent=ms<=60000;
+ return `<div class="game-timer ${urgent?"urgent":""}">⏱ <span id="countdown">${formatTime(ms)}</span></div>`;
+}
+function startCountdown(){
+ clearInterval(S.timerId);
+ const tick=()=>{
+   const el=document.querySelector("#countdown");
+   const ms=remainingMs();
+   if(el){el.textContent=formatTime(ms);const box=el.closest(".game-timer");if(box)box.classList.toggle("urgent",ms<=60000);}
+   if(ms<=0){clearInterval(S.timerId);S.timerId=null;handleTimeUp();}
+ };
+ tick();S.timerId=setInterval(tick,500);
+}
+function handleTimeUp(){
+ if(document.querySelector(".timeup-overlay"))return;
+ const ov=document.createElement("div");ov.className="timeup-overlay";
+ ov.innerHTML=`<div class="timeup-card"><div class="timeup-icon">⏰</div><h2>시간 종료!</h2><p>현재 문제까지만 마치고 대기 미니게임으로 이동해요.</p></div>`;
+ document.body.appendChild(ov);setTimeout(()=>ov.remove(),1200);
+ S.timeExpired=true;
+}
 function rankingRows(){
  const sid=S.sessionId;
  let rows=JSON.parse(localStorage.getItem("LQ_live_session")||"[]")
@@ -84,16 +113,16 @@ function home(){
  let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}"), ses=active[cls];
  if(!ses){let now=Date.now(),settings=JSON.parse(localStorage.getItem("LQ_game_settings")||'{"minutes":15}');ses={id:`${cls}-${now}`,startedAt:now,endsAt:now+settings.minutes*60000,minutes:settings.minutes};active[cls]=ses;localStorage.setItem("LQ_active_sessions",JSON.stringify(active));}
  if(typeof ses==="string"){let now=Date.now();ses={id:ses,startedAt:now,endsAt:now+15*60000,minutes:15};active[cls]=ses;localStorage.setItem("LQ_active_sessions",JSON.stringify(active));}
- questions=questions;S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:ses.id,sessionEndsAt:ses.endsAt};updateLiveSession();question()};
+ questions=questions;S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:ses.id,sessionEndsAt:ses.endsAt,timeExpired:false};updateLiveSession();question()};
  $("#teacher").onclick=teacherGate;
 }
 function chrome(inner){
  let pi=petInfo(), pct=S.q/S.playQuestions.length*100;
  layout(`<div class="petbar"><div class="petemoji">${pi.emoji}</div><div class="evo"><b>${pi.name}</b> · ${S.score}점<div class="evoline"><div style="width:${pi.pct}%"></div></div><span class="note">${pi.i<2?`다음 진화까지 ${Math.max(0,pi.next-S.score)}점`:"최종 진화 완료!"}</span></div></div>
- <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${S.playQuestions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats"><div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
- <div class="playgrid"><div class="card">${inner}</div>${rankingHTML()}</div>`);
+ <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${S.playQuestions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats">${timerHTML()}<div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
+ <div class="playgrid"><div class="card">${inner}</div>${rankingHTML()}</div>`);startCountdown();
 }
-function question(){S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
+function question(){if(S.timeExpired||remainingMs()<=0){S.timeExpired=true;return results();}S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
 function choice(q){chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title).replace(/\n/g,"<br>")}</div>${q.options.map(o=>`<button class="option ${S.selected===o?"sel":""}" data-o="${esc(o)}">${esc(o)}</button>`).join("")}<div class="actions"><button class="btn" id="check">CHECK</button></div>`);
  document.querySelectorAll(".option").forEach(b=>b.onclick=()=>{S.selected=b.dataset.o;choice(q)});$("#check").onclick=()=>{if(!S.selected)return alert("답을 골라 주세요.");finish(S.selected===q.answer,S.selected)}
 }
@@ -137,9 +166,9 @@ function finishSpeech(){
  S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});updateLiveSession();
  let after=stage(S.score);if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);setTimeout(next,1050);}else next();
 }
-function next(){S.q++;S.recognizing=false;if(S.q>=S.playQuestions.length)results();else question()}
+function next(){S.q++;S.recognizing=false;if(S.timeExpired||remainingMs()<=0||S.q>=S.playQuestions.length)results();else question()}
 function results(){
- save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);
+ clearInterval(S.timerId);S.timerId=null;save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);
  layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)} 완료!</h1>
  <div class="metrics"><div class="metric"><span>FINAL SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div>
  <p class="sub">본 게임은 끝났어요. 이제 순위 발표를 기다리면서 미니게임을 즐겨보세요! 미니게임 점수는 LIVE RANKING에 영향을 주지 않습니다.</p>
@@ -166,7 +195,16 @@ function renderMini(){
  ${opts.map(o=>`<button class="option" data-mini="${esc(o)}">${esc(o)}</button>`).join("")}
  <div class="stats" style="margin-top:15px"><div class="pill">🎮 MINI ${miniState.score}</div><div class="pill">🔥 ${miniState.streak}</div><div class="pill">📚 ${miniWords.length} words</div></div>
  <p class="note">영→한 / 한→영이 번갈아 계속 출제됩니다. 미니게임 점수는 본 게임 랭킹에 반영되지 않습니다.</p></div>${rankingHTML()}</div>`);
- document.querySelectorAll("[data-mini]").forEach(b=>b.onclick=()=>{let ok=b.dataset.mini===correct;if(ok){miniState.score+=10;miniState.streak++}else miniState.streak=0;b.classList.add(ok?"mini-ok":"mini-bad");document.querySelectorAll("[data-mini]").forEach(x=>x.disabled=true);setTimeout(()=>{miniState.index++;renderMini()},650)});
+ document.querySelectorAll("[data-mini]").forEach(b=>b.onclick=()=>{let ok=b.dataset.mini===correct;if(ok){miniState.score+=10;miniState.streak++}else miniState.streak=0;b.classList.add(ok?"mini-ok":"mini-bad");document.querySelectorAll("[data-mini]").forEach(x=>x.disabled=true);
+   if(ok && miniState.streak>=30){setTimeout(()=>miniStampWin(),500);}
+   else setTimeout(()=>{miniState.index++;renderMini()},650);
+ });
+}
+function miniStampWin(){
+ layout(`<div class="card hero stamp-win"><div class="stamp-emoji">🏅</div><span class="badge">MISSION COMPLETE</span><h1>도장 하나 획득!</h1>
+ <p class="sub"><b>30개 연속 정답</b>을 달성했어요.</p>
+ <div class="stamp-box">선생님께 화면을 보여드리고<br><b>도장판에 도장 1개를 받으세요!</b></div>
+ <p class="note">이 화면은 선생님께 확인받기 전까지 닫지 마세요.</p></div>`);
 }
 function save(){let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
 function teacher(){
