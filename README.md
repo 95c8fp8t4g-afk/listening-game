@@ -121,3 +121,19 @@ Supabase 연결 후에는 전 학생의 실시간 랭킹으로 변경할 수 있
 - 새 세션 시작 시 이전 랭킹 발표 상태 초기화
 
 주의: 현재 localStorage 구조에서는 교사 기기의 발표 버튼을 학생들의 서로 다른 휴대폰으로 실시간 전파할 수 없습니다. 실제 수업에서 동시에 전환하려면 Supabase 연결이 필요합니다.
+
+
+## v15 — Supabase 연결
+- Project URL / Publishable key 연결
+- 반별 게임 세션을 Supabase `game_sessions`에서 생성/조회
+- 학생 점수는 `student_scores`에 upsert
+- 학생별 점수/정답 수/정답률을 서버에 저장
+- 학생 기기끼리 같은 세션의 랭킹을 공유
+- 학생 점수 변경을 Supabase Realtime으로 구독
+- 교사의 랭킹 발표 상태를 `game_sessions.ranking_published`로 공유
+- 학생 대기 화면은 발표 상태를 확인해 자동으로 최종 결과 화면으로 전환
+- 본게임 문제는 `game_questions`에서 읽고 교사 편집 시 서버에 저장
+- Excel 단어장은 `vocabulary` 테이블에 저장/학생 기기에서 공유
+
+주의:
+현재 RLS 정책은 MVP 테스트를 위해 anon 쓰기 권한이 넓습니다. 실제 학교 배포 전에는 교사 인증과 더 엄격한 정책으로 잠그는 것을 권장합니다.

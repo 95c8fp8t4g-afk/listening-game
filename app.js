@@ -1,4 +1,12 @@
 
+const SUPABASE_URL="https://tlwhknuxlrxxxheqvxin.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY="sb_publishable_NSCjCmHg2sBJOFqx9B-xBg_W1104UB6";
+const supabaseClient=window.supabase?.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+
+async function sbSafe(fn,fallback=null){
+ try{return await fn()}catch(e){console.error("Supabase:",e);return fallback}
+}
+
 const $=s=>document.querySelector(s), app=$("#app");
 const PETS={
  chicken:{name:"닭",stages:[["🥚","알"],["🐣","병아리"],["🐔","닭"]]},
@@ -94,26 +102,164 @@ function evolutionToast(emoji,name){
  const el=document.createElement("div");el.className="evo-toast";el.innerHTML=`<div class="evo-pop"><div class="evo-big">${emoji}</div><b>${esc(name)}로 진화!</b><span>LEVEL UP ✨</span></div>`;
  document.body.appendChild(el);setTimeout(()=>el.classList.add("show"),10);setTimeout(()=>{el.classList.remove("show");setTimeout(()=>el.remove(),180)},1000);
 }
-function home(){
+
+async function loadRemoteQuestions(){
+ if(!supabaseClient)return;
+ const {data,error}=await supabaseClient.from("game_questions").select("*").order("question_no",{ascending:true});
+ if(error){console.error(error);return}
+ if(data?.length){
+   questions=data.map(r=>({
+     type:r.type,round:r.round_name||"Question",title:r.title||"",target:r.target||"",
+     options:Array.isArray(r.options)?r.options:[],
+     answer:Array.isArray(r.answer)?r.answer:(r.answer?.value??r.answer??""),
+     items:Array.isArray(r.answer)?r.answer:[],
+     enabled:r.enabled
+   }));
+ }
+}
+async function saveQuestionsRemote(){
+ if(!supabaseClient)return;
+ const rows=questions.map((q,i)=>({
+   question_no:i+1,type:q.type,round_name:q.round||"Question",title:q.title||"",target:q.target||null,
+   options:q.type==="choice"?(q.options||[]):[],
+   answer:q.type==="order"?(q.answer||[]):q.type==="choice"?{value:q.answer||""}:null,
+   enabled:!!q.enabled,updated_at:new Date().toISOString()
+ }));
+ const {error}=await supabaseClient.from("game_questions").upsert(rows,{onConflict:"question_no"});
+ if(error)console.error(error);
+}
+async function loadRemoteVocab(){
+ if(!supabaseClient)return;
+ const {data,error}=await supabaseClient.from("vocabulary").select("english,korean").order("id",{ascending:true});
+ if(!error && data?.length)miniWords=data.map(x=>({en:x.english,ko:x.korean}));
+}
+async function replaceRemoteVocab(){
+ if(!supabaseClient)return;
+ await supabaseClient.from("vocabulary").delete().neq("id",0);
+ if(miniWords.length){
+   const {error}=await supabaseClient.from("vocabulary").insert(miniWords.map(w=>({english:w.en,korean:w.ko})));
+   if(error)console.error(error);
+ }
+}
+async function getActiveSession(className){
+ if(!supabaseClient)return null;
+ const {data,error}=await supabaseClient.from("game_sessions")
+   .select("*").eq("class_name",className).eq("is_active",true)
+   .order("started_at",{ascending:false}).limit(1).maybeSingle();
+ if(error){console.error(error);return null}
+ return data;
+}
+async function createRemoteSession(className,minutes){
+ if(!supabaseClient)return null;
+ await supabaseClient.from("game_sessions").update({is_active:false}).eq("class_name",className).eq("is_active",true);
+ const started=new Date(), ends=new Date(started.getTime()+minutes*60000);
+ const {data,error}=await supabaseClient.from("game_sessions").insert({
+   class_name:className,duration_minutes:minutes,started_at:started.toISOString(),
+   ends_at:ends.toISOString(),ranking_published:false,is_active:true
+ }).select().single();
+ if(error){console.error(error);return null}
+ return data;
+}
+async function upsertRemoteScore(finished=false){
+ if(!supabaseClient||!S.student||!S.sessionId)return;
+ const row={
+   session_id:S.sessionId,class_name:S.student.className,student_name:S.student.name,
+   character_key:S.student.pet,score:S.score,correct_count:S.correct,
+   total_count:(S.playQuestions||[]).length,finished,updated_at:new Date().toISOString()
+ };
+ const {error}=await supabaseClient.from("student_scores").upsert(row,{onConflict:"session_id,class_name,student_name"});
+ if(error)console.error(error);
+}
+async function fetchRemoteRanking(){
+ if(!supabaseClient||!S.sessionId)return [];
+ const {data,error}=await supabaseClient.from("student_scores")
+   .select("class_name,student_name,score,correct_count,total_count,updated_at")
+   .eq("session_id",S.sessionId).order("score",{ascending:false}).order("updated_at",{ascending:true});
+ if(error){console.error(error);return []}
+ return data||[];
+}
+async function publishRemoteRanking(){
+ if(!supabaseClient||!S.sessionId)return false;
+ const {error}=await supabaseClient.from("game_sessions").update({ranking_published:true}).eq("id",S.sessionId);
+ if(error){console.error(error);return false}
+ return true;
+}
+async function resetRemoteRankingPublish(){
+ if(!supabaseClient||!S.sessionId)return false;
+ const {error}=await supabaseClient.from("game_sessions").update({ranking_published:false}).eq("id",S.sessionId);
+ if(error){console.error(error);return false}
+ return true;
+}
+async function checkRemotePublished(){
+ if(!supabaseClient||!S.sessionId)return false;
+ const {data,error}=await supabaseClient.from("game_sessions").select("ranking_published").eq("id",S.sessionId).maybeSingle();
+ if(error){console.error(error);return false}
+ return !!data?.ranking_published;
+}
+function subscribeSession(){
+ if(!supabaseClient||!S.sessionId)return;
+ try{if(S.scoreChannel)supabaseClient.removeChannel(S.scoreChannel)}catch(e){}
+ S.scoreChannel=supabaseClient.channel(`scores-${S.sessionId}`)
+   .on("postgres_changes",{event:"*",schema:"public",table:"student_scores",filter:`session_id=eq.${S.sessionId}`},()=>refreshStudentRanking())
+   .subscribe();
+ try{if(S.sessionChannel)supabaseClient.removeChannel(S.sessionChannel)}catch(e){}
+ S.sessionChannel=supabaseClient.channel(`session-${S.sessionId}`)
+   .on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_sessions",filter:`id=eq.${S.sessionId}`},payload=>{
+      if(payload.new?.ranking_published)showFinalRankingRemote();
+   }).subscribe();
+}
+async function refreshStudentRanking(){
+ const rows=await fetchRemoteRanking();
+ S.remoteRanking=rows;
+ const holder=document.querySelector("#studentRankingHolder");
+ if(holder)holder.innerHTML=studentRankingHTMLRemote(rows);
+}
+function studentRankingHTMLRemote(rows){
+ const settingsVisible=true;
+ if(!settingsVisible||!rows?.length)return "";
+ const top3=rows.slice(0,3);
+ const myIndex=rows.findIndex(r=>r.student_name===S.student?.name&&r.class_name===S.student?.className);
+ const myRank=myIndex>=0?myIndex+1:null;
+ return `<div class="ranking student-rank"><div class="ranktitle">🏆 LIVE RANKING</div>
+   ${top3.map((r,i)=>`<div class="rankrow ${r.student_name===S.student?.name?"me":""}"><b>${i+1}</b><span>${esc(r.student_name)}</span><strong>${r.score}</strong></div>`).join("")}
+   ${myRank && myRank>3?`<div class="my-rank-divider"></div><div class="rankrow me"><b>${myRank}</b><span>${esc(S.student.name)} (나)</span><strong>${S.score}</strong></div>`:""}
+ </div>`;
+}
+async function showFinalRankingRemote(){
+ const rows=await fetchRemoteRanking();
+ const top3=rows.slice(0,3);
+ const me=rows.find(r=>r.student_name===S.student?.name&&r.class_name===S.student?.className);
+ const myIndex=rows.findIndex(r=>r===me),myRank=myIndex>=0?myIndex+1:"-";
+ const correct=me?.correct_count??S.correct??0,total=me?.total_count??(S.playQuestions||[]).length??0;
+ const accuracy=total?Math.round(correct/total*100):0;
+ layout(`<div class="card hero"><div class="final-result-card"><span class="badge">FINAL RANKING</span><h1>🏆 순위 발표</h1>
+ <div class="podium">${top3.map((r,i)=>`<div class="podium-row rank-${i+1}"><b>${i+1}위</b><span>${esc(r.student_name)}</span><strong>${r.score}점</strong></div>`).join("")}</div>
+ <div class="my-final"><div><span>내 순위</span><b>${myRank}위</b></div><div><span>맞힌 개수</span><b>${correct}개</b></div><div><span>정답률</span><b>${accuracy}%</b></div></div>
+ </div></div>`);
+}
+async function home(){
+ await Promise.all([loadRemoteQuestions(),loadRemoteVocab()]);
  layout(`<div class="card hero"><span class="badge">🎧 LISTENING QUEST</span><h1>Choose. Play.<br>Grow!</h1><p class="sub">영어 문제를 풀고 점수를 모아 내 캐릭터를 진화시키세요.</p>
  <div class="grid2"><div><label>학급</label><select id="cls">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>이름</label><input id="nm" placeholder="이름"></div></div>
  <label>캐릭터 선택</label><div class="chars">${Object.entries(PETS).map(([k,p],i)=>`<button class="char ${i===0?"sel":""}" data-p="${k}"><div class="emoji">${p.stages[0][0]}</div><b>${p.name}</b><span class="note">${p.stages.map(x=>x[1]).join(" → ")}</span></button>`).join("")}</div>
  <button class="btn full" id="go">GAME START →</button><button class="teacher-icon" id="teacher" title="교사용">⚙️</button>
  <p class="note">진화 기준: 600점 / 1,200점 · 정답 기본 점수: 60점 · 속도/콤보 보너스는 소폭 적용</p></div>`);
  let pet="chicken";document.querySelectorAll(".char").forEach(b=>b.onclick=()=>{pet=b.dataset.p;document.querySelectorAll(".char").forEach(x=>x.classList.remove("sel"));b.classList.add("sel")});
- $("#go").onclick=()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");let aq=activeQuestions();if(!aq.length)return alert("교사가 아직 문제를 등록하지 않았습니다.");
- let cls=$("#cls").value;
- let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}"), ses=active[cls];
- if(!ses){let now=Date.now(),settings=JSON.parse(localStorage.getItem("LQ_game_settings")||'{"minutes":15}');ses={id:`${cls}-${now}`,startedAt:now,endsAt:now+settings.minutes*60000,minutes:settings.minutes};active[cls]=ses;localStorage.setItem("LQ_active_sessions",JSON.stringify(active));}
- if(typeof ses==="string"){let now=Date.now();ses={id:ses,startedAt:now,endsAt:now+15*60000,minutes:15};active[cls]=ses;localStorage.setItem("LQ_active_sessions",JSON.stringify(active));}
- questions=questions;S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:ses.id,sessionEndsAt:ses.endsAt,timeExpired:false};updateLiveSession();question()};
+ $("#go").onclick=async()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");
+ let aq=activeQuestions();if(!aq.length)return alert("교사가 아직 문제를 등록하지 않았습니다.");
+ let cls=$("#cls").value, ses=await getActiveSession(cls);
+ if(!ses)return alert("선생님이 아직 이 반의 게임 세션을 시작하지 않았습니다.");
+ if(new Date(ses.ends_at).getTime()<=Date.now())return alert("이 반의 플레이 시간이 이미 종료되었습니다.");
+ S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:ses.id,sessionEndsAt:new Date(ses.ends_at).getTime(),timeExpired:false};
+ await upsertRemoteScore(false);subscribeSession();question();
+ };
  $("#teacher").onclick=teacherGate;
 }
 function chrome(inner){
  let pi=petInfo(), pct=S.q/S.playQuestions.length*100;
  layout(`<div class="petbar"><div class="petemoji">${pi.emoji}</div><div class="evo"><b>${pi.name}</b> · ${S.score}점<div class="evoline"><div style="width:${pi.pct}%"></div></div><span class="note">${pi.i<2?`다음 진화까지 ${Math.max(0,pi.next-S.score)}점`:"최종 진화 완료!"}</span></div></div>
  <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${S.playQuestions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats">${timerHTML()}<div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
- <div class="playgrid"><div class="card">${inner}</div>${studentRankingHTML()}</div>`);startCountdown();
+ <div class="playgrid"><div class="card">${inner}</div><div id="studentRankingHolder"></div></div>`);startCountdown();refreshStudentRanking();
 }
 function question(){if(S.timeExpired||remainingMs()<=0){S.timeExpired=true;return waitForRankingScreen();}S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
 function choice(q){chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title).replace(/\n/g,"<br>")}</div>${q.options.map(o=>`<button class="option ${S.selected===o?"sel":""}" data-o="${esc(o)}">${esc(o)}</button>`).join("")}<div class="actions"><button class="btn" id="check">CHECK</button></div>`);
@@ -132,7 +278,7 @@ function speedBonus(){
 }
 function finish(ok,response){
  let before=stage(S.score),gain=0,bonus={points:0,label:""};if(ok){S.correct++;S.combo++;bonus=speedBonus();gain=60+bonus.points+Math.min(S.combo*5,20);S.score+=gain}else S.combo=0;
- S.answers.push({q:S.q+1,type:S.playQuestions[S.q].type,correct:ok,response,points:gain,speedBonus:bonus.points});updateLiveSession();
+ S.answers.push({q:S.q+1,type:S.playQuestions[S.q].type,correct:ok,response,points:gain,speedBonus:bonus.points});updateLiveSession();upsertRemoteScore(false);
  let after=stage(S.score),msg=ok?`✓ 정답! +${gain}점${bonus.label?`<br>${bonus.label}`:""}`:"✕ 아쉬워요. 다음 문제에 도전!";
  $(".card").insertAdjacentHTML("beforeend",`<div class="feedback ${ok?"ok":"bad"}">${msg}</div><div class="actions"><button class="btn" id="next">NEXT →</button></div>`);
  $("#check")?.remove();document.querySelectorAll(".option,.icon").forEach(x=>x.disabled=true);$("#next").onclick=next;if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);}
@@ -156,7 +302,7 @@ function stopRec(q){S.recognizing=false;try{S.rec.stop()}catch(e){};S.speechScor
 function finishSpeech(){
  let raw=S.speechScore, sb=speedBonus(), before=stage(S.score);
  let gain=Math.round(raw*0.6)+(raw>=70?Math.round(sb.points*0.5):0); // 발음 정확도가 중심, 빠른 성공은 최대 +50
- S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});updateLiveSession();
+ S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain});updateLiveSession();upsertRemoteScore(false);
  let after=stage(S.score);if(after>before){let p=petInfo();evolutionToast(p.emoji,p.name);setTimeout(next,1050);}else next();
 }
 function next(){S.q++;S.recognizing=false;if(S.timeExpired||remainingMs()<=0)waitForRankingScreen();else if(S.q>=S.playQuestions.length)results();else question()}
@@ -223,7 +369,7 @@ function miniStampWin(){
  <div class="stamp-box">선생님께 화면을 보여드리고<br><b>도장판에 도장 1개를 받으세요!</b></div>
  <p class="note">이 화면은 선생님께 확인받기 전까지 닫지 마세요.</p></div>`);
 }
-function save(){updateLiveSession();let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
+function save(){updateLiveSession();upsertRemoteScore(true);let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
 function teacher(){
  let results=JSON.parse(localStorage.getItem("LQ_results")||"[]");
  layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="sessionTab">🏁 게임 설정</button><button class="tab" id="miniTab">🎮 미니게임 편집</button><button class="tab" id="rankingTab">🏆 랭킹 관리</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
@@ -231,42 +377,21 @@ function teacher(){
 }
 
 function sessionManager(){
- const settings=JSON.parse(localStorage.getItem("LQ_game_settings")||'{"minutes":15}');
  $("#panel").innerHTML=`<div class="card"><span class="badge">GAME SETTINGS</span><h2>수업 게임 설정</h2>
  <p class="sub">학생에게는 이 설정이 보이지 않습니다. 수업 시작 전에 반과 플레이 시간을 정하고 새 세션을 시작하세요.</p>
  <div class="grid2"><div><label>학급</label><select id="sessionClass">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div>
- <div><label>플레이 시간</label><select id="playMinutes">${[5,10,15,20,25,30,40,45].map(m=>`<option value="${m}" ${settings.minutes===m?"selected":""}>${m}분</option>`).join("")}</select></div></div>
+ <div><label>플레이 시간</label><select id="playMinutes">${[5,10,15,20,25,30,40,45].map(m=>`<option value="${m}">${m}분</option>`).join("")}</select></div></div>
  <button class="btn full" style="margin-top:12px" id="newSession">🏁 설정 저장 + 새 게임 시작</button>
  <div id="sessionMsg" class="note" style="margin-top:15px"></div></div>`;
- $("#newSession").onclick=()=>{
-   const cls=$("#sessionClass").value, minutes=+$("#playMinutes").value, now=Date.now();
-   localStorage.setItem("LQ_game_settings",JSON.stringify({minutes}));
-   let active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}");
-   active[cls]={id:`${cls}-${now}`,startedAt:now,endsAt:now+minutes*60000,minutes};
-   localStorage.setItem("LQ_active_sessions",JSON.stringify(active));
-   localStorage.setItem("LQ_ranking_settings",JSON.stringify({visible:false,published:false,sessionId:active[cls].id}));
+ $("#newSession").onclick=async()=>{
+   const cls=$("#sessionClass").value,minutes=+$("#playMinutes").value;
+   const ses=await createRemoteSession(cls,minutes);
+   if(!ses)return alert("세션 생성에 실패했습니다.");
+   S.sessionId=ses.id;S.sessionEndsAt=new Date(ses.ends_at).getTime();
    $("#sessionMsg").innerHTML=`✓ <b>${esc(cls)}</b> · <b>${minutes}분</b> 게임 세션이 시작되었습니다.`;
  };
 }
 
-function rankingManager(){
- let sid=S.sessionId;
- if(!sid){
-   const active=JSON.parse(localStorage.getItem("LQ_active_sessions")||"{}");
-   const vals=Object.values(active).filter(Boolean);
-   const last=vals[vals.length-1];
-   sid=typeof last==="string"?last:last?.id;
- }
- $("#panel").innerHTML=`<div class="card"><span class="badge">RANKING CONTROL</span><h2>랭킹 관리</h2>
- <p class="sub">학생들은 시간이 끝나면 순위 발표 대기 화면으로 이동합니다. 아래 버튼을 누르면 학생들에게 최종 결과가 공개됩니다.</p>
- <div class="editor"><div class="actions" style="justify-content:flex-start;flex-wrap:wrap">
- <button class="btn" id="publishRanking">🏆 랭킹 발표</button>
- <button class="btn secondary" id="resetRankingPublish">발표 상태 초기화</button></div>
- <p class="note">현재 세션: ${esc(sid||"없음")}</p></div>
- <div id="teacherFullRanking">${teacherRankingHTML()}</div></div>`;
- $("#publishRanking").onclick=()=>{if(!sid)return alert("현재 게임 세션이 없습니다.");localStorage.setItem("LQ_ranking_settings",JSON.stringify({visible:true,published:true,sessionId:sid}));alert("랭킹을 발표했습니다.");rankingManager();};
- $("#resetRankingPublish").onclick=()=>{localStorage.setItem("LQ_ranking_settings",JSON.stringify({visible:false,published:false,sessionId:sid||null}));alert("랭킹 발표 상태를 초기화했습니다.");rankingManager();};
-}
 function miniEditor(){
  $("#panel").innerHTML=`<div class="card"><span class="badge">VOCABULARY SHEET</span><h2>엑셀 단어장 업로드</h2>
  <p class="sub">엑셀의 첫 번째 열은 <b>영어</b>, 두 번째 열은 <b>한국어 뜻</b>으로 읽습니다. 헤더가 있어도 자동으로 제외합니다.</p>
@@ -292,7 +417,7 @@ async function importVocabExcel(){
    let pairs=rows.map(r=>({en:String(r[0]||"").trim(),ko:String(r[1]||"").trim()})).filter(x=>x.en&&x.ko);
    if(pairs.length && /english|영어|word|단어/i.test(pairs[0].en) && /korean|뜻|의미|한국어/i.test(pairs[0].ko))pairs.shift();
    if(!pairs.length)return alert("첫 번째 열과 두 번째 열에서 단어를 찾지 못했습니다.");
-   miniWords=pairs;localStorage.setItem("LQ_mini_words",JSON.stringify(miniWords));alert(`${pairs.length}개의 단어를 불러왔습니다.`);miniEditor();
+   miniWords=pairs;localStorage.setItem("LQ_mini_words",JSON.stringify(miniWords));await replaceRemoteVocab();alert(`${pairs.length}개의 단어를 불러왔습니다.`);miniEditor();
  }catch(e){console.error(e);alert("엑셀 파일을 읽지 못했습니다. 첫 시트의 A열=영어, B열=한국어 뜻인지 확인해 주세요.");}
 }
 function editor(){
@@ -305,7 +430,7 @@ function editor(){
  document.querySelectorAll("[data-type]").forEach(s=>s.onchange=()=>{questions[+s.dataset.type].type=s.value;localStorage.setItem("LQ_questions",JSON.stringify(questions));editor()});
  $("#saveQ").onclick=()=>{
   questions.forEach((q,i)=>{q.title=document.querySelector(`[data-title="${i}"]`).value.trim();q.enabled=document.querySelector(`[data-enabled="${i}"]`).checked && !!q.title;if(q.type==="order"){let a=document.querySelector(`[data-lines="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);q.answer=a;q.items=shuffle([...a])}if(q.type==="choice"){q.options=document.querySelector(`[data-options="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);q.answer=document.querySelector(`[data-answer="${i}"]`).value.trim()}if(q.type==="speak")q.target=document.querySelector(`[data-target="${i}"]`).value.trim()});
-  localStorage.setItem("LQ_questions",JSON.stringify(questions));alert("저장되었습니다. 학생 게임에 바로 반영됩니다.");
+  localStorage.setItem("LQ_questions",JSON.stringify(questions));saveQuestionsRemote();alert("저장되었습니다. 학생 게임에 바로 반영됩니다.");
  };
  $("#reset").onclick=()=>{if(confirm("기본 문제로 되돌릴까요?")){questions=JSON.parse(JSON.stringify(DEFAULT));localStorage.setItem("LQ_questions",JSON.stringify(questions));editor()}};
 }
