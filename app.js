@@ -237,6 +237,36 @@ async function showFinalRankingRemote(){
  <div class="my-final"><div><span>내 순위</span><b>${myRank}위</b></div><div><span>맞힌 개수</span><b>${correct}개</b></div><div><span>정답률</span><b>${accuracy}%</b></div></div>
  </div></div>`);
 }
+
+async function createWaitingSession(className,minutes){
+ await supabaseClient.from("game_sessions").update({is_active:false,status:"finished"}).eq("class_name",className).eq("is_active",true);
+ const {data,error}=await supabaseClient.from("game_sessions").insert({class_name:className,duration_minutes:minutes,started_at:null,ends_at:null,ranking_published:false,is_active:true,status:"waiting"}).select().single();
+ if(error){console.error(error);return null} return data;
+}
+async function joinLobby(ses,name,cls,pet){
+ const {error}=await supabaseClient.from("session_players").upsert({session_id:ses.id,class_name:cls,student_name:name,character_key:pet},{onConflict:"session_id,class_name,student_name"});
+ return !error;
+}
+async function fetchLobbyPlayers(id){
+ const {data}=await supabaseClient.from("session_players").select("*").eq("session_id",id).order("joined_at",{ascending:true}); return data||[];
+}
+async function startRemoteSession(id,minutes){
+ const now=new Date(),ends=new Date(now.getTime()+minutes*60000);
+ const {data,error}=await supabaseClient.from("game_sessions").update({status:"playing",started_at:now.toISOString(),ends_at:ends.toISOString(),ranking_published:false}).eq("id",id).select().single();
+ if(error){console.error(error);return null} return data;
+}
+async function getSessionById(id){const {data}=await supabaseClient.from("game_sessions").select("*").eq("id",id).maybeSingle();return data}
+function lobbyScreen(ses){
+ S.sessionId=ses.id;
+ layout(`<div class="card hero waiting-screen"><div class="waiting-icon">🎮</div><span class="badge">GAME LOBBY</span><h1>게임 대기실</h1><p class="sub"><b>${esc(S.student.name)}</b> 입장 완료!<br>선생님이 게임을 시작할 때까지 기다려 주세요.</p><div class="waiting-dots"><span></span><span></span><span></span></div><div class="note">시작 신호 대기 중…</div></div>`);
+ try{if(S.lobbyChannel)supabaseClient.removeChannel(S.lobbyChannel)}catch(e){}
+ S.lobbyChannel=supabaseClient.channel(`lobby-${ses.id}`).on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_sessions",filter:`id=eq.${ses.id}`},p=>{if(p.new?.status==="playing")beginSharedGame(p.new)}).subscribe();
+ clearInterval(S.lobbyPoll);S.lobbyPoll=setInterval(async()=>{const x=await getSessionById(ses.id);if(x?.status==="playing"){clearInterval(S.lobbyPoll);beginSharedGame(x)}},1000);
+}
+async function beginSharedGame(ses){
+ clearInterval(S.lobbyPoll);S.sessionId=ses.id;S.sessionEndsAt=new Date(ses.ends_at).getTime();S.timeExpired=false;
+ await upsertRemoteScore(false);subscribeSession();question();
+}
 async function home(){
  await Promise.all([loadRemoteQuestions(),loadRemoteVocab()]);
  layout(`<div class="card hero"><span class="badge">🎧 LISTENING QUEST</span><h1>Choose. Play.<br>Grow!</h1><p class="sub">영어 문제를 풀고 점수를 모아 내 캐릭터를 진화시키세요.</p>
@@ -247,13 +277,13 @@ async function home(){
  let pet="chicken";document.querySelectorAll(".char").forEach(b=>b.onclick=()=>{pet=b.dataset.p;document.querySelectorAll(".char").forEach(x=>x.classList.remove("sel"));b.classList.add("sel")});
  $("#go").onclick=async()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");
  let aq=activeQuestions();if(!aq.length)return alert("교사가 아직 문제를 등록하지 않았습니다.");
- let cls=$("#cls").value, ses=await getActiveSession(cls);
- if(!ses)return alert("선생님이 아직 이 반의 게임 세션을 시작하지 않았습니다.");
- if(new Date(ses.ends_at).getTime()<=Date.now())return alert("이 반의 플레이 시간이 이미 종료되었습니다.");
- S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:ses.id,sessionEndsAt:new Date(ses.ends_at).getTime(),timeExpired:false};
- await upsertRemoteScore(false);subscribeSession();question();
- };
- $("#teacher").onclick=teacherGate;
+ let cls=$("#cls").value,ses=await getActiveSession(cls);if(!ses)return alert("선생님이 아직 이 반의 게임을 만들지 않았습니다.");
+ S={...S,student:{name,className:cls,pet},q:0,score:0,combo:0,correct:0,answers:[],transcript:"",speechScore:null,playQuestions:aq,sessionId:ses.id,timeExpired:false};
+ if(ses.status==="waiting"){if(!await joinLobby(ses,name,cls,pet))return alert("대기실 입장에 실패했습니다.");return lobbyScreen(ses)}
+ if(ses.status==="playing"){if(new Date(ses.ends_at).getTime()<=Date.now())return alert("게임 시간이 종료되었습니다.");await joinLobby(ses,name,cls,pet);return beginSharedGame(ses)}
+ return alert("이 반의 게임이 이미 종료되었습니다.");
+};
+$("#teacher").onclick=teacherGate;
 }
 function chrome(inner){
  let pi=petInfo(), pct=S.q/S.playQuestions.length*100;
@@ -377,19 +407,17 @@ function teacher(){
 }
 
 function sessionManager(){
- $("#panel").innerHTML=`<div class="card"><span class="badge">GAME SETTINGS</span><h2>수업 게임 설정</h2>
- <p class="sub">학생에게는 이 설정이 보이지 않습니다. 수업 시작 전에 반과 플레이 시간을 정하고 새 세션을 시작하세요.</p>
- <div class="grid2"><div><label>학급</label><select id="sessionClass">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div>
- <div><label>플레이 시간</label><select id="playMinutes">${[5,10,15,20,25,30,40,45].map(m=>`<option value="${m}">${m}분</option>`).join("")}</select></div></div>
- <button class="btn full" style="margin-top:12px" id="newSession">🏁 설정 저장 + 새 게임 시작</button>
- <div id="sessionMsg" class="note" style="margin-top:15px"></div></div>`;
- $("#newSession").onclick=async()=>{
-   const cls=$("#sessionClass").value,minutes=+$("#playMinutes").value;
-   const ses=await createRemoteSession(cls,minutes);
-   if(!ses)return alert("세션 생성에 실패했습니다.");
-   S.sessionId=ses.id;S.sessionEndsAt=new Date(ses.ends_at).getTime();
-   $("#sessionMsg").innerHTML=`✓ <b>${esc(cls)}</b> · <b>${minutes}분</b> 게임 세션이 시작되었습니다.`;
- };
+ $("#panel").innerHTML=`<div class="card"><span class="badge">GAME LOBBY</span><h2>수업 게임 설정</h2><p class="sub">대기실을 만든 뒤 학생 입장을 확인하고 ▶ 게임 시작을 누르세요. 그 순간 전원의 공통 타이머가 시작됩니다.</p><div class="grid2"><div><label>학급</label><select id="sessionClass">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>플레이 시간</label><select id="playMinutes">${[5,10,15,20,25,30,40,45].map(m=>`<option value="${m}">${m}분</option>`).join("")}</select></div></div><div class="actions"><button class="btn" id="createLobby">① 대기실 만들기</button></div><div id="lobbyControl"></div></div>`;
+ $("#createLobby").onclick=async()=>{const cls=$("#sessionClass").value,minutes=+$("#playMinutes").value,ses=await createWaitingSession(cls,minutes);if(!ses)return alert("대기실 생성 실패");S.sessionId=ses.id;renderTeacherLobby(ses,minutes);subscribeTeacherLobby(ses,minutes)};
+}
+async function renderTeacherLobby(ses,minutes){
+ const players=await fetchLobbyPlayers(ses.id),h=$("#lobbyControl");if(!h)return;
+ h.innerHTML=`<div class="teacher-lobby"><div class="lobby-head"><div><span>현재 접속</span><b>${players.length}명</b></div><button class="btn" id="startAll" ${players.length?"":"disabled"}>▶ 게임 시작</button></div><div class="player-chips">${players.length?players.map(p=>`<span>${PETS[p.character_key]?.emoji||"🙂"} ${esc(p.student_name)}</span>`).join(""):`학생 입장을 기다리는 중…`}</div><p class="note">${esc(ses.class_name)} · ${minutes}분 · 시작 전에는 시간이 흐르지 않습니다.</p></div>`;
+ $("#startAll").onclick=async()=>{if(!confirm(`${players.length}명이 입장했습니다. 지금 시작할까요?`))return;const x=await startRemoteSession(ses.id,minutes);if(!x)return alert("게임 시작 실패");S.sessionEndsAt=new Date(x.ends_at).getTime();h.innerHTML=`<div class="teacher-lobby"><h3>▶ 게임 진행 중</h3><p>모든 학생이 같은 종료 시각을 사용합니다.</p></div>`};
+}
+function subscribeTeacherLobby(ses,minutes){
+ try{if(S.teacherLobbyChannel)supabaseClient.removeChannel(S.teacherLobbyChannel)}catch(e){}
+ S.teacherLobbyChannel=supabaseClient.channel(`teacher-lobby-${ses.id}`).on("postgres_changes",{event:"*",schema:"public",table:"session_players",filter:`session_id=eq.${ses.id}`},()=>renderTeacherLobby(ses,minutes)).subscribe();
 }
 
 function miniEditor(){

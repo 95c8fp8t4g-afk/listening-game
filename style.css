@@ -67,3 +67,7 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 .rank-1{background:#fffbeb}.rank-2{background:#f8fafc}.rank-3{background:#fff7ed}
 .my-final{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px}.my-final>div{border:1px solid var(--line);border-radius:14px;padding:16px}.my-final span{display:block;font-size:11px;color:var(--muted);font-weight:800}.my-final b{display:block;font-size:24px;margin-top:5px;color:var(--p)}
 @media(max-width:700px){.my-final{grid-template-columns:1fr}.podium-row{grid-template-columns:55px 1fr auto}}
+
+.teacher-lobby{margin-top:18px;border:1px solid var(--line);border-radius:18px;padding:16px;background:#fafafa}
+.lobby-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.lobby-head>div span{display:block;font-size:11px;color:var(--muted);font-weight:800}.lobby-head>div b{font-size:30px;color:var(--p)}
+.player-chips{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0}.player-chips span{background:white;border:1px solid var(--line);border-radius:999px;padding:7px 10px;font-size:12px;font-weight:800}
