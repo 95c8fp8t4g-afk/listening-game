@@ -43,7 +43,7 @@ const MINI_DEFAULT=[
 ]
 let miniWords=JSON.parse(localStorage.getItem("LQ_mini_words")||"null")||MINI_DEFAULT;
 let questions=JSON.parse(localStorage.getItem("LQ_questions")||"null")||DEFAULT;
-let S={student:null,q:0,score:0,combo:0,correct:0,answers:[],selected:null,order:[],transcript:"",speechScore:null,recognizing:false,rec:null,questionStartedAt:null,sessionId:null,sessionEndsAt:null,timerId:null};
+let S={student:null,q:0,score:0,combo:0,correct:0,answers:[],selected:null,order:[],transcript:"",speechScore:null,recognizing:false,rec:null,questionStartedAt:null,sessionId:null,sessionEndsAt:null,timerId:null,activityStatus:"lobby",miniStreak:0,currentQuestion:0,resultWaiting:false};
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
 function layout(x){app.innerHTML=`<div class="shell"><div class="top"><div class="brand">Listening <b>Quest</b> <small>v2</small></div></div>${x}</div>`}
 function stage(score){return score>=1200?2:score>=600?1:0}
@@ -75,13 +75,11 @@ function startCountdown(){
  tick();S.timerId=setInterval(tick,500);
 }
 function handleTimeUp(){
- if(S.timeExpired)return;
- S.timeExpired=true;
- try{if(S.recognizing&&S.rec)S.rec.stop()}catch(e){}
+ if(S.timeExpired||S.resultWaiting)return;
+ S.timeExpired=true;finishSessionRemote();
  const ov=document.createElement("div");ov.className="timeup-overlay";
  ov.innerHTML=`<div class="timeup-card"><div class="timeup-icon">⏰</div><h2>시간 종료!</h2><p>순위 발표 대기 화면으로 이동합니다.</p></div>`;
- document.body.appendChild(ov);
- setTimeout(()=>{ov.remove();waitForRankingScreen();},900);
+ document.body.appendChild(ov);setTimeout(()=>{ov.remove();waitForRankingScreen();},500);
 }
 function rankingRows(){
  return allSessionRankingRows().slice(0,5);
@@ -165,15 +163,24 @@ async function upsertRemoteScore(finished=false){
  const row={
    session_id:S.sessionId,class_name:S.student.className,student_name:S.student.name,
    character_key:S.student.pet,score:S.score,correct_count:S.correct,
-   total_count:(S.playQuestions||[]).length,finished,updated_at:new Date().toISOString()
+   total_count:(S.playQuestions||[]).length,finished,
+   activity_status:S.activityStatus||"main_game",
+   current_question:S.currentQuestion||0,
+   mini_streak:S.miniStreak||0,updated_at:new Date().toISOString()
  };
  const {error}=await supabaseClient.from("student_scores").upsert(row,{onConflict:"session_id,class_name,student_name"});
  if(error)console.error(error);
 }
+async function finishSessionRemote(){
+ if(!supabaseClient||!S.sessionId)return false;
+ const {error}=await supabaseClient.from("game_sessions").update({status:"finished",is_active:false}).eq("id",S.sessionId);
+ if(error){console.error(error);return false}
+ return true;
+}
 async function fetchRemoteRanking(){
  if(!supabaseClient||!S.sessionId)return [];
  const {data,error}=await supabaseClient.from("student_scores")
-   .select("class_name,student_name,score,correct_count,total_count,updated_at")
+   .select("class_name,student_name,score,correct_count,total_count,activity_status,current_question,mini_streak,finished,updated_at")
    .eq("session_id",S.sessionId).order("score",{ascending:false}).order("updated_at",{ascending:true});
  if(error){console.error(error);return []}
  return data||[];
@@ -206,6 +213,7 @@ function subscribeSession(){
  S.sessionChannel=supabaseClient.channel(`session-${S.sessionId}`)
    .on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_sessions",filter:`id=eq.${S.sessionId}`},payload=>{
       if(payload.new?.ranking_published)showFinalRankingRemote();
+      else if(payload.new?.status==="finished"&&!S.resultWaiting)waitForRankingScreen();
    }).subscribe();
 }
 async function refreshStudentRanking(){
@@ -224,6 +232,16 @@ function studentRankingHTMLRemote(rows){
    ${top3.map((r,i)=>`<div class="rankrow ${r.student_name===S.student?.name?"me":""}"><b>${i+1}</b><span>${esc(r.student_name)}</span><strong>${r.score}</strong></div>`).join("")}
    ${myRank && myRank>3?`<div class="my-rank-divider"></div><div class="rankrow me"><b>${myRank}</b><span>${esc(S.student.name)} (나)</span><strong>${S.score}</strong></div>`:""}
  </div>`;
+}
+function waitForRankingScreen(){
+ if(S.resultWaiting)return;
+ S.resultWaiting=true;S.timeExpired=true;S.activityStatus="waiting";
+ clearInterval(S.timerId);S.timerId=null;
+ try{if(S.recognizing&&S.rec)S.rec.stop()}catch(e){}
+ upsertRemoteScore(true);
+ layout(`<div class="card hero waiting-screen"><div class="waiting-icon">🏆</div><span class="badge">WAITING FOR RESULTS</span><h1>순위 발표를 기다려 주세요!</h1><p class="sub">게임이 종료됐어요. 선생님이 랭킹을 발표하면 이 화면이 자동으로 결과 화면으로 바뀝니다.</p><div class="waiting-dots"><span></span><span></span><span></span></div><div class="note">결과 대기 중…</div></div>`);
+ clearInterval(S.publishPoll);
+ S.publishPoll=setInterval(async()=>{const ses=await getSessionById(S.sessionId);if(ses?.ranking_published){clearInterval(S.publishPoll);S.publishPoll=null;showFinalRankingRemote();}},800);
 }
 async function showFinalRankingRemote(){
  const rows=await fetchRemoteRanking();
@@ -264,7 +282,7 @@ function lobbyScreen(ses){
  clearInterval(S.lobbyPoll);S.lobbyPoll=setInterval(async()=>{const x=await getSessionById(ses.id);if(x?.status==="playing"){clearInterval(S.lobbyPoll);beginSharedGame(x)}},1000);
 }
 async function beginSharedGame(ses){
- clearInterval(S.lobbyPoll);S.sessionId=ses.id;S.sessionEndsAt=new Date(ses.ends_at).getTime();S.timeExpired=false;
+ clearInterval(S.lobbyPoll);S.sessionId=ses.id;S.sessionEndsAt=new Date(ses.ends_at).getTime();S.timeExpired=false;S.resultWaiting=false;S.activityStatus="main_game";S.currentQuestion=1;S.miniStreak=0;
  await upsertRemoteScore(false);subscribeSession();question();
 }
 async function home(){
@@ -291,7 +309,7 @@ function chrome(inner){
  <div class="gamehead"><div><div class="note">${esc(S.student.className)} · ${esc(S.student.name)} · ${S.q+1}/${S.playQuestions.length}</div><div class="progress"><div style="width:${pct}%"></div></div></div><div class="stats">${timerHTML()}<div class="pill">⭐ ${S.score}점</div><div class="pill">🔥 ${S.combo} COMBO</div></div></div>
  <div class="playgrid"><div class="card">${inner}</div><div id="studentRankingHolder"></div></div>`);startCountdown();refreshStudentRanking();
 }
-function question(){if(S.timeExpired||remainingMs()<=0){S.timeExpired=true;return waitForRankingScreen();}S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
+function question(){if(S.timeExpired||remainingMs()<=0){S.timeExpired=true;return waitForRankingScreen();}S.activityStatus="main_game";S.currentQuestion=S.q+1;S.miniStreak=0;upsertRemoteScore(false);S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();let q=S.playQuestions[S.q];if(q.type==="order"){S.order=[...q.items];order(q)}else if(q.type==="choice")choice(q);else speak(q)}
 function choice(q){chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title).replace(/\n/g,"<br>")}</div>${q.options.map(o=>`<button class="option ${S.selected===o?"sel":""}" data-o="${esc(o)}">${esc(o)}</button>`).join("")}<div class="actions"><button class="btn" id="check">CHECK</button></div>`);
  document.querySelectorAll(".option").forEach(b=>b.onclick=()=>{S.selected=b.dataset.o;choice(q)});$("#check").onclick=()=>{if(!S.selected)return alert("답을 골라 주세요.");finish(S.selected===q.answer,S.selected)}
 }
@@ -337,7 +355,7 @@ function finishSpeech(){
 }
 function next(){S.q++;S.recognizing=false;if(S.timeExpired||remainingMs()<=0)waitForRankingScreen();else if(S.q>=S.playQuestions.length)results();else question()}
 function results(){
- clearInterval(S.timerId);S.timerId=null;save();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);
+ clearInterval(S.timerId);S.timerId=null;S.activityStatus="mini_game";S.currentQuestion=S.playQuestions.length;S.miniStreak=0;upsertRemoteScore(false);saveLocalOnly();let pi=petInfo(),acc=Math.round(S.correct/S.playQuestions.length*100);
  layout(`<div class="card hero"><span class="badge">MISSION COMPLETE</span><h1>${pi.emoji} ${esc(S.student.name)} 완료!</h1>
  <div class="metrics"><div class="metric"><span>FINAL SCORE</span><b>${S.score}</b></div><div class="metric"><span>ACCURACY</span><b>${acc}%</b></div><div class="metric"><span>CHARACTER</span><b>${pi.name}</b></div></div>
  <p class="sub">본 게임은 끝났어요. 남은 시간 동안 미니게임을 즐겨보세요! 미니게임 점수는 LIVE RANKING에 영향을 주지 않습니다.</p>
@@ -363,14 +381,13 @@ function startMiniCountdown(){
  tick();S.timerId=setInterval(tick,500);
 }
 function miniTimeUp(){
- if(S.timeExpired)return;
- S.timeExpired=true;
- waitForRankingScreen();
+ if(S.timeExpired||S.resultWaiting)return;
+ S.timeExpired=true;finishSessionRemote();waitForRankingScreen();
 }
 function startMiniGame(){
  if(remainingMs()<=0)return miniTimeUp();
  if(!miniWords.length){layout(`<div class="card hero"><h2>순위 발표를 기다려 주세요 🏆</h2>${miniTimerHTML()}<p class="sub">교사가 아직 단어장을 등록하지 않았습니다.</p></div>`);startMiniCountdown();return}
- miniState={index:0,score:0,streak:0,order:shuffle([...miniWords]),direction:"en-ko"};renderMini();
+ miniState={index:0,score:0,streak:0,order:shuffle([...miniWords]),direction:"en-ko"};S.activityStatus="mini_game";S.miniStreak=0;upsertRemoteScore(false);renderMini();
 }
 function makeDistractors(correct,key){
  let pool=miniWords.map(w=>w[key]).filter(x=>x&&x!==correct);
@@ -378,6 +395,7 @@ function makeDistractors(correct,key){
 }
 function renderMini(){
  if(remainingMs()<=0)return miniTimeUp();
+ S.activityStatus="mini_game";S.miniStreak=miniState.streak;upsertRemoteScore(false);
  if(miniState.index>0 && miniState.index%miniState.order.length===0)miniState.order=shuffle([...miniWords]);
  let w=miniState.order[miniState.index%miniState.order.length];
  let enToKo=miniState.index%2===0, prompt=enToKo?w.en:w.ko, correct=enToKo?w.ko:w.en, key=enToKo?"ko":"en";
@@ -388,38 +406,54 @@ function renderMini(){
  <div class="stats" style="margin-top:15px"><div class="pill">🎮 MINI ${miniState.score}</div><div class="pill">🔥 ${miniState.streak}</div><div class="pill">📚 ${miniWords.length} words</div></div>
  <p class="note">영→한 / 한→영이 번갈아 계속 출제됩니다. 미니게임 점수는 본 게임 랭킹에 반영되지 않습니다.</p></div></div>`);
  startMiniCountdown();
- document.querySelectorAll("[data-mini]").forEach(b=>b.onclick=()=>{if(remainingMs()<=0)return miniTimeUp();let ok=b.dataset.mini===correct;if(ok){miniState.score+=10;miniState.streak++}else miniState.streak=0;b.classList.add(ok?"mini-ok":"mini-bad");document.querySelectorAll("[data-mini]").forEach(x=>x.disabled=true);
+ document.querySelectorAll("[data-mini]").forEach(b=>b.onclick=()=>{if(remainingMs()<=0)return miniTimeUp();let ok=b.dataset.mini===correct;if(ok){miniState.score+=10;miniState.streak++}else miniState.streak=0;S.miniStreak=miniState.streak;upsertRemoteScore(false);b.classList.add(ok?"mini-ok":"mini-bad");document.querySelectorAll("[data-mini]").forEach(x=>x.disabled=true);
    if(ok && miniState.streak>=30){setTimeout(()=>miniStampWin(),500);}
    else setTimeout(()=>{miniState.index++;renderMini()},650);
  });
 }
 function miniStampWin(){
- clearInterval(S.timerId);S.timerId=null;layout(`<div class="card hero stamp-win"><div class="stamp-emoji">🏅</div><span class="badge">MISSION COMPLETE</span><h1>도장 하나 획득!</h1>
+ clearInterval(S.timerId);S.timerId=null;S.activityStatus="stamp_done";S.miniStreak=30;upsertRemoteScore(true);layout(`<div class="card hero stamp-win"><div class="stamp-emoji">🏅</div><span class="badge">MISSION COMPLETE</span><h1>도장 하나 획득!</h1>
  <p class="sub"><b>30개 연속 정답</b>을 달성했어요.</p>
  <div class="stamp-box">선생님께 화면을 보여드리고<br><b>도장판에 도장 1개를 받으세요!</b></div>
  <p class="note">이 화면은 선생님께 확인받기 전까지 닫지 마세요.</p></div>`);
 }
-function save(){updateLiveSession();upsertRemoteScore(true);let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
+function saveLocalOnly(){updateLiveSession();let r=JSON.parse(localStorage.getItem("LQ_results")||"[]");r.push({student:S.student,score:S.score,correct:S.correct,total:S.playQuestions.length,answers:S.answers,date:new Date().toISOString(),sessionId:S.sessionId});localStorage.setItem("LQ_results",JSON.stringify(r))}
 function teacher(){
  let results=JSON.parse(localStorage.getItem("LQ_results")||"[]");
  layout(`<div class="tabs"><button class="tab active" id="editTab">✏️ 문제 편집</button><button class="tab" id="reportTab">📊 리포트</button><button class="tab" id="sessionTab">🏁 게임 설정</button><button class="tab" id="miniTab">🎮 미니게임 편집</button><button class="tab" id="rankingTab">🏆 랭킹 관리</button><button class="tab" id="studentTab">학생 화면</button></div><div id="panel"></div>`);
  $("#editTab").onclick=()=>editor();$("#reportTab").onclick=()=>report(results);$("#sessionTab").onclick=()=>sessionManager();$("#miniTab").onclick=()=>miniEditor();$("#rankingTab").onclick=()=>rankingManager();$("#studentTab").onclick=home;editor();
 }
 
+function statusLabel(r){
+ if(r.activity_status==="main_game")return `🎧 본게임 ${Math.min(r.current_question||1,r.total_count||15)}/${r.total_count||15}`;
+ if(r.activity_status==="mini_game")return `🎮 미니게임 · 연속 ${r.mini_streak||0}개`;
+ if(r.activity_status==="stamp_done")return `🏅 도장 획득 · 30개 성공`;
+ if(r.activity_status==="waiting")return `🏆 결과 대기`;
+ return `⏳ 대기실`;
+}
+async function fetchSessionProgress(sessionId){
+ const {data,error}=await supabaseClient.from("student_scores").select("student_name,class_name,score,correct_count,total_count,activity_status,current_question,mini_streak,finished,updated_at").eq("session_id",sessionId).order("student_name",{ascending:true});
+ if(error){console.error(error);return []}return data||[];
+}
+async function renderTeacherProgress(ses,minutes){
+ const h=$("#lobbyControl");if(!h)return;
+ const players=await fetchLobbyPlayers(ses.id),rows=await fetchSessionProgress(ses.id),latest=await getSessionById(ses.id);
+ const status=latest?.status||ses.status,playing=status==="playing",finished=status==="finished";
+ const allMainDone=rows.length>0&&rows.every(r=>["mini_game","stamp_done","waiting"].includes(r.activity_status));
+ const remaining=latest?.ends_at?Math.max(0,new Date(latest.ends_at).getTime()-Date.now()):0;
+ h.innerHTML=`<div class="teacher-lobby"><div class="lobby-head"><div><span>${playing?"현재 참가":"현재 접속"}</span><b>${players.length}명</b></div><div class="teacher-session-actions">${status==="waiting"?`<button class="btn" id="startAll" ${players.length?"":"disabled"}>▶ 게임 시작</button>`:playing?`<button class="btn danger" id="forceEnd">⏹ 게임 즉시 종료</button>`:`<span class="badge">게임 종료</span>`}</div></div>${playing?`<div class="teacher-session-summary"><span>⏱ 남은 시간 <b>${formatTime(remaining)}</b></span>${allMainDone?`<strong>✅ 모두 본게임 완료 — 지금 종료 가능</strong>`:""}</div>`:""}<div class="progress-table-wrap"><table><tr><th>학생</th><th>현재 상태</th><th>점수</th><th>정답</th></tr>${rows.length?rows.map(r=>`<tr><td>${esc(r.student_name)}</td><td>${statusLabel(r)}</td><td>${r.score}</td><td>${r.correct_count}/${r.total_count}</td></tr>`).join(""):players.map(p=>`<tr><td>${esc(p.student_name)}</td><td>⏳ 대기실</td><td>-</td><td>-</td></tr>`).join("")}</table></div><p class="note">${esc(ses.class_name)} · ${minutes}분</p></div>`;
+ if(status==="waiting"&&$("#startAll"))$("#startAll").onclick=async()=>{if(!confirm(`${players.length}명이 입장했습니다. 지금 동시에 시작할까요?`))return;const x=await startRemoteSession(ses.id,minutes);if(!x)return alert("게임 시작 실패");S.sessionEndsAt=new Date(x.ends_at).getTime();renderTeacherProgress(x,minutes);subscribeTeacherProgress(x,minutes)};
+ if(playing&&$("#forceEnd"))$("#forceEnd").onclick=async()=>{if(!confirm("남은 시간과 관계없이 지금 전 학생의 게임을 종료할까요?"))return;const {error}=await supabaseClient.from("game_sessions").update({status:"finished",is_active:false}).eq("id",ses.id);if(error)return alert("즉시 종료 실패");alert("게임을 종료했습니다. 학생들은 순위 발표 대기 화면으로 이동합니다.");renderTeacherProgress({...ses,status:"finished"},minutes)};
+}
+function subscribeTeacherProgress(ses,minutes){
+ try{if(S.teacherProgressChannel)supabaseClient.removeChannel(S.teacherProgressChannel)}catch(e){}
+ S.teacherProgressChannel=supabaseClient.channel(`teacher-progress-${ses.id}`).on("postgres_changes",{event:"*",schema:"public",table:"student_scores",filter:`session_id=eq.${ses.id}`},()=>renderTeacherProgress(ses,minutes)).on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_sessions",filter:`id=eq.${ses.id}`},()=>renderTeacherProgress(ses,minutes)).on("postgres_changes",{event:"*",schema:"public",table:"session_players",filter:`session_id=eq.${ses.id}`},()=>renderTeacherProgress(ses,minutes)).subscribe();
+ clearInterval(S.teacherProgressPoll);S.teacherProgressPoll=setInterval(()=>renderTeacherProgress(ses,minutes),1000);
+}
 function sessionManager(){
- $("#panel").innerHTML=`<div class="card"><span class="badge">GAME LOBBY</span><h2>수업 게임 설정</h2><p class="sub">대기실을 만든 뒤 학생 입장을 확인하고 ▶ 게임 시작을 누르세요. 그 순간 전원의 공통 타이머가 시작됩니다.</p><div class="grid2"><div><label>학급</label><select id="sessionClass">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>플레이 시간</label><select id="playMinutes">${[5,10,15,20,25,30,40,45].map(m=>`<option value="${m}">${m}분</option>`).join("")}</select></div></div><div class="actions"><button class="btn" id="createLobby">① 대기실 만들기</button></div><div id="lobbyControl"></div></div>`;
- $("#createLobby").onclick=async()=>{const cls=$("#sessionClass").value,minutes=+$("#playMinutes").value,ses=await createWaitingSession(cls,minutes);if(!ses)return alert("대기실 생성 실패");S.sessionId=ses.id;renderTeacherLobby(ses,minutes);subscribeTeacherLobby(ses,minutes)};
+ $("#panel").innerHTML=`<div class="card"><span class="badge">GAME LOBBY</span><h2>수업 게임 설정</h2><p class="sub">대기실을 만든 뒤 학생 입장을 확인하고 ▶ 게임 시작을 누르세요. 시작 후에는 학생별 진행 상태를 실시간으로 확인하고 필요하면 즉시 종료할 수 있습니다.</p><div class="grid2"><div><label>학급</label><select id="sessionClass">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>플레이 시간</label><select id="playMinutes">${[5,10,15,20,25,30,40,45].map(m=>`<option value="${m}">${m}분</option>`).join("")}</select></div></div><div class="actions"><button class="btn" id="createLobby">① 대기실 만들기</button></div><div id="lobbyControl"></div></div>`;
+ $("#createLobby").onclick=async()=>{const cls=$("#sessionClass").value,minutes=+$("#playMinutes").value,ses=await createWaitingSession(cls,minutes);if(!ses)return alert("대기실 생성 실패");S.sessionId=ses.id;S.teacherSessionMinutes=minutes;renderTeacherProgress(ses,minutes);subscribeTeacherProgress(ses,minutes)};
 }
-async function renderTeacherLobby(ses,minutes){
- const players=await fetchLobbyPlayers(ses.id),h=$("#lobbyControl");if(!h)return;
- h.innerHTML=`<div class="teacher-lobby"><div class="lobby-head"><div><span>현재 접속</span><b>${players.length}명</b></div><button class="btn" id="startAll" ${players.length?"":"disabled"}>▶ 게임 시작</button></div><div class="player-chips">${players.length?players.map(p=>`<span>${PETS[p.character_key]?.emoji||"🙂"} ${esc(p.student_name)}</span>`).join(""):`학생 입장을 기다리는 중…`}</div><p class="note">${esc(ses.class_name)} · ${minutes}분 · 시작 전에는 시간이 흐르지 않습니다.</p></div>`;
- $("#startAll").onclick=async()=>{if(!confirm(`${players.length}명이 입장했습니다. 지금 시작할까요?`))return;const x=await startRemoteSession(ses.id,minutes);if(!x)return alert("게임 시작 실패");S.sessionEndsAt=new Date(x.ends_at).getTime();h.innerHTML=`<div class="teacher-lobby"><h3>▶ 게임 진행 중</h3><p>모든 학생이 같은 종료 시각을 사용합니다.</p></div>`};
-}
-function subscribeTeacherLobby(ses,minutes){
- try{if(S.teacherLobbyChannel)supabaseClient.removeChannel(S.teacherLobbyChannel)}catch(e){}
- S.teacherLobbyChannel=supabaseClient.channel(`teacher-lobby-${ses.id}`).on("postgres_changes",{event:"*",schema:"public",table:"session_players",filter:`session_id=eq.${ses.id}`},()=>renderTeacherLobby(ses,minutes)).subscribe();
-}
-
 function miniEditor(){
  $("#panel").innerHTML=`<div class="card"><span class="badge">VOCABULARY SHEET</span><h2>엑셀 단어장 업로드</h2>
  <p class="sub">엑셀의 첫 번째 열은 <b>영어</b>, 두 번째 열은 <b>한국어 뜻</b>으로 읽습니다. 헤더가 있어도 자동으로 제외합니다.</p>
