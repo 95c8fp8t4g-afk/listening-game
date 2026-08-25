@@ -968,3 +968,117 @@ async function reports(){
  document.querySelectorAll("#reportClassTabs .class-tab").forEach(b=>b.onclick=()=>show(b.dataset.class));
  show("2학년 1반");
 }
+
+
+// ===== v22: verified Supabase reports + reset =====
+async function getAllClassScores(className){
+ const {data,error}=await supabaseClient.from("student_scores")
+   .select("*").eq("class_name",className).order("updated_at",{ascending:false});
+ if(error){console.error("REPORT SELECT ERROR",error);throw error}
+ return data||[];
+}
+
+async function resetClassRecordsV22(className){
+ try{
+   // Delete scores directly by class first. This avoids depending on session lookup.
+   let q1=await supabaseClient.from("student_scores").delete().eq("class_name",className).select("id");
+   if(q1.error)throw q1.error;
+
+   // Find all sessions for this class and remove lobby/session rows.
+   const q2=await supabaseClient.from("game_sessions").select("id").eq("class_name",className);
+   if(q2.error)throw q2.error;
+   const ids=(q2.data||[]).map(x=>x.id);
+   if(ids.length){
+     const q3=await supabaseClient.from("session_players").delete().in("session_id",ids).select("id");
+     if(q3.error)throw q3.error;
+     const q4=await supabaseClient.from("game_sessions").delete().in("id",ids).select("id");
+     if(q4.error)throw q4.error;
+   }
+
+   // Verify deletion instead of assuming success.
+   const verify=await supabaseClient.from("student_scores").select("id").eq("class_name",className);
+   if(verify.error)throw verify.error;
+   if((verify.data||[]).length)throw new Error("삭제 후에도 학생 기록이 남아 있습니다.");
+   return {ok:true,deletedScores:(q1.data||[]).length};
+ }catch(err){
+   console.error("RESET ERROR",err);
+   return {ok:false,message:err?.message||String(err)};
+ }
+}
+
+async function reports(){
+ setTeacherActiveTab("reports");
+ $("#panel").innerHTML=`<div class="card"><span class="badge">SUPABASE REPORTS</span><h2>학생 플레이 리포트</h2>
+ <p class="sub">Supabase에 실제 저장된 학생 기록을 반별로 분석합니다.</p>
+ <div class="class-tabs" id="reportClassTabs">${[...Array(11)].map((_,i)=>`<button class="class-tab ${i===0?"active":""}" data-class="2학년 ${i+1}반">${i+1}반</button>`).join("")}</div>
+ <div id="reportBody"><p class="sub">리포트를 불러오는 중…</p></div></div>`;
+
+ async function show(cls){
+   document.querySelectorAll("#reportClassTabs .class-tab").forEach(x=>x.classList.toggle("active",x.dataset.class===cls));
+   const body=$("#reportBody");
+   body.innerHTML=`<p class="sub">Supabase에서 ${esc(cls)} 기록을 불러오는 중…</p>`;
+   try{
+     const data=await getAllClassScores(cls);
+     if(!data.length){body.innerHTML=`<div class="empty-report">아직 ${esc(cls)}에 저장된 플레이 기록이 없습니다.</div>`;return;}
+     const avgAcc=Math.round(data.reduce((a,r)=>a+(Number(r.accuracy) || (r.total_count?Math.round(Number(r.correct_count||0)/Number(r.total_count)*100):0)),0)/data.length);
+     const avgScore=Math.round(data.reduce((a,r)=>a+Number(r.score||0),0)/data.length);
+     const timed=data.filter(r=>r.play_time_seconds!==null&&r.play_time_seconds!==undefined);
+     const avgTime=timed.length?Math.round(timed.reduce((a,r)=>a+Number(r.play_time_seconds||0),0)/timed.length):null;
+
+     body.innerHTML=`<div class="report-summary">
+       <div><span>저장 기록</span><b>${data.length}</b></div>
+       <div><span>평균 점수</span><b>${avgScore}</b></div>
+       <div><span>평균 정답률</span><b>${avgAcc}%</b></div>
+       <div><span>평균 플레이 타임</span><b>${formatPlayTime(avgTime)}</b></div>
+     </div>
+     <div class="table-wrap"><table><tr><th>학생</th><th>점수</th><th>플레이 타임</th><th>정답</th><th>정답률</th><th>현재 상태</th><th>최근 저장</th></tr>
+     ${data.map(r=>`<tr><td>${esc(r.student_name||"-")}</td><td>${Number(r.score||0)}</td><td>${formatPlayTime(r.play_time_seconds)}</td><td>${Number(r.correct_count||0)}/${Number(r.total_count||0)}</td><td>${Number(r.accuracy) || (r.total_count?Math.round(Number(r.correct_count||0)/Number(r.total_count)*100):0)}%</td><td>${r.finished?"완료":esc(r.activity_status||"진행 중")}</td><td>${r.updated_at?new Date(r.updated_at).toLocaleString("ko-KR"):"-"}</td></tr>`).join("")}</table></div>`;
+   }catch(err){
+     body.innerHTML=`<div class="report-error"><b>⚠️ 리포트를 불러오지 못했습니다.</b><span>${esc(err?.message||String(err))}</span></div>`;
+   }
+ }
+ document.querySelectorAll("#reportClassTabs .class-tab").forEach(b=>b.onclick=()=>show(b.dataset.class));
+ show("2학년 1반");
+}
+
+async function rankingManager(){
+ setTeacherActiveTab("ranking");
+ if(typeof watchTeacherSessionForResults==="function")watchTeacherSessionForResults();
+ $("#panel").innerHTML=`<div class="card"><span class="badge">RANKING BY CLASS</span><h2>랭킹 관리</h2>
+ <p class="sub">반별 랭킹을 확인하거나 해당 반의 모든 기록을 초기화할 수 있습니다.</p>
+ <div class="class-tabs" id="rankClassTabs">${[...Array(11)].map((_,i)=>`<button class="class-tab ${i===0?"active":""}" data-class="2학년 ${i+1}반">${i+1}반</button>`).join("")}</div>
+ <div id="classRankingBody"></div></div>`;
+
+ async function show(cls){
+   document.querySelectorAll("#rankClassTabs .class-tab").forEach(x=>x.classList.toggle("active",x.dataset.class===cls));
+   const body=$("#classRankingBody");
+   try{
+     const data=await getAllClassScores(cls);
+     // Rank the most recent session only, preventing old games from mixing into current rank.
+     let rows=[];
+     let session=null;
+     const latest=await latestSessionForClass(cls);
+     if(latest){
+       session=latest;
+       rows=data.filter(r=>r.session_id===latest.id).sort((a,b)=>(Number(b.score||0)-Number(a.score||0))||((a.play_time_seconds??Infinity)-(b.play_time_seconds??Infinity)));
+     }
+     body.innerHTML=`<div class="rank-tools"><div><b>${esc(cls)}</b><span>${rows.length}명 기록</span></div>
+       <div class="rank-tool-buttons">${session?`<button class="btn" id="publishClassRank" ${session.status==="finished"&&!session.ranking_published?"":"disabled"}>🏆 랭킹 발표</button>`:""}
+       <button class="btn danger" id="resetClassRank">🗑️ ${esc(cls.replace("2학년 ",""))} 기록 전체 초기화</button></div></div>
+       ${rows.length?`<div class="table-wrap"><table><tr><th>등수</th><th>이름</th><th>점수</th><th>플레이 타임</th><th>정답</th><th>정답률</th></tr>
+       ${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.student_name)}</td><td>${Number(r.score||0)}</td><td>${formatPlayTime(r.play_time_seconds)}</td><td>${Number(r.correct_count||0)}/${Number(r.total_count||0)}</td><td>${Number(r.accuracy)||(r.total_count?Math.round(Number(r.correct_count||0)/Number(r.total_count)*100):0)}%</td></tr>`).join("")}</table></div>`:`<div class="empty-report">${esc(cls)}의 현재 랭킹 기록이 없습니다.</div>`}`;
+     const pb=$("#publishClassRank");if(pb)pb.onclick=async()=>{S.sessionId=session.id;if(await publishRemoteRanking()){alert(`${cls} 랭킹을 발표했습니다.`);show(cls);}};
+     $("#resetClassRank").onclick=async()=>{
+       if(!confirm(`${cls}의 랭킹과 리포트를 모두 삭제할까요?\n삭제 후 복구할 수 없습니다.`))return;
+       const btn=$("#resetClassRank");btn.disabled=true;btn.textContent="삭제 중…";
+       const result=await resetClassRecordsV22(cls);
+       if(result.ok){if(session&&S.sessionId===session.id)S.sessionId=null;alert(`${cls} 기록 ${result.deletedScores}건을 삭제했습니다.`);show(cls);}
+       else{btn.disabled=false;btn.textContent=`🗑️ ${cls.replace("2학년 ","")} 기록 전체 초기화`;alert(`초기화 실패: ${result.message}`);}
+     };
+   }catch(err){
+     body.innerHTML=`<div class="report-error"><b>⚠️ 랭킹을 불러오지 못했습니다.</b><span>${esc(err?.message||String(err))}</span></div>`;
+   }
+ }
+ document.querySelectorAll("#rankClassTabs .class-tab").forEach(b=>b.onclick=()=>show(b.dataset.class));
+ show("2학년 1반");
+}
