@@ -1084,92 +1084,105 @@ async function rankingManager(){
 }
 
 
-// ===== v23: teacher multi-select kick =====
-async function kickSelectedPlayers(sessionId, playerIds){
- if(!supabaseClient||!playerIds?.length)return {ok:false,message:"선택된 학생이 없습니다."};
- const {error}=await supabaseClient.from("session_players")
-   .delete().eq("session_id",sessionId).in("id",playerIds);
+// ===== v24: fixed lobby transition + working multi-select kick =====
+async function kickSelectedPlayersV24(sessionId,ids){
+ const {error}=await supabaseClient.from("session_players").delete().eq("session_id",sessionId).in("id",ids);
  if(error){console.error("KICK ERROR",error);return {ok:false,message:error.message}}
  return {ok:true};
 }
-
-function subscribeStudentKick(sessionId){
+function subscribeStudentKickV24(sessionId){
  clearInterval(S.kickPoll);
  S.kickPoll=setInterval(async()=>{
    if(!S.student?.name||!sessionId)return;
    const {data,error}=await supabaseClient.from("session_players")
      .select("id").eq("session_id",sessionId)
-     .eq("class_name",S.student.className)
-     .eq("student_name",S.student.name).maybeSingle();
+     .eq("class_name",S.student.className).eq("student_name",S.student.name).maybeSingle();
    if(error)return;
    if(!data){
-     clearInterval(S.kickPoll);S.kickPoll=null;
+     clearInterval(S.kickPoll);clearInterval(S.lobbyPoll);
      try{if(S.lobbyChannel)supabaseClient.removeChannel(S.lobbyChannel)}catch(e){}
      alert("선생님이 대기실에서 퇴장시켰습니다. 학급과 이름을 다시 설정해 주세요.");
-     S.sessionId=null;
-     S.student=null;
-     home();
+     S.sessionId=null;S.student=null;home();
    }
  },800);
 }
-
+// Keep the known-working v22 start listener and add kick monitoring without calling missing functions.
 function lobbyScreen(ses){
  S.sessionId=ses.id;
- layout(`<div class="card hero waiting-screen"><div class="waiting-icon">🎮</div><span class="badge">GAME LOBBY</span>
- <h1>게임 대기실</h1><p class="sub"><b>${esc(S.student.name)}</b> 입장 완료!<br>선생님이 게임을 시작할 때까지 기다려 주세요.</p>
- <div class="waiting-dots"><span></span><span></span><span></span></div><div class="note">시작 신호 대기 중…</div></div>`);
- subscribeLobbyStart(ses.id);
- subscribeStudentKick(ses.id);
+ layout(`<div class="card hero waiting-screen"><div class="waiting-icon">🎮</div><span class="badge">GAME LOBBY</span><h1>게임 대기실</h1><p class="sub"><b>${esc(S.student.name)}</b> 입장 완료!<br>선생님이 게임을 시작할 때까지 기다려 주세요.</p><div class="waiting-dots"><span></span><span></span><span></span></div><div class="note">시작 신호 대기 중…</div></div>`);
+ try{if(S.lobbyChannel)supabaseClient.removeChannel(S.lobbyChannel)}catch(e){}
+ S.lobbyChannel=supabaseClient.channel(`lobby-${ses.id}`)
+   .on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_sessions",filter:`id=eq.${ses.id}`},p=>{
+     if(p.new?.status==="playing"){clearInterval(S.kickPoll);beginSharedGame(p.new)}
+   }).subscribe();
+ clearInterval(S.lobbyPoll);
+ S.lobbyPoll=setInterval(async()=>{
+   const x=await getSessionById(ses.id);
+   if(x?.status==="playing"){clearInterval(S.lobbyPoll);clearInterval(S.kickPoll);beginSharedGame(x)}
+ },1000);
+ subscribeStudentKickV24(ses.id);
 }
 
-async function renderTeacherLobby(ses,minutes){
- const players=await fetchLobbyPlayers(ses.id);
- const holder=$("#lobbyControl");if(!holder)return;
- holder.innerHTML=`<div class="teacher-lobby">
-   <div class="lobby-head"><div><span>현재 접속</span><b>${players.length}명</b></div>
-   <button class="btn" id="startAll" ${players.length?"":"disabled"}>▶ 게임 시작</button></div>
+async function renderTeacherProgress(ses,minutes){
+ const h=$("#lobbyControl");if(!h)return;
+ const players=await fetchLobbyPlayers(ses.id),rows=await fetchSessionProgress(ses.id),latest=await getSessionById(ses.id);
+ const status=latest?.status||ses.status,playing=status==="playing",finished=status==="finished";
+ const allMainDone=rows.length>0&&rows.every(r=>["mini_game","stamp_done","waiting"].includes(r.activity_status));
+ const remaining=latest?.ends_at?Math.max(0,new Date(latest.ends_at).getTime()-Date.now()):0;
+
+ const kickBlock=status==="waiting"?`
+ <div class="kick-box">
    <div class="kick-toolbar">
-     <label class="select-all-wrap"><input type="checkbox" id="selectAllPlayers"> 전체 선택</label>
-     <span id="selectedPlayerCount">0명 선택</span>
-     <button class="btn danger" id="kickSelected" disabled>🚪 선택 학생 강퇴</button>
+     <label><input type="checkbox" id="selectAllPlayersV24"> 전체 선택</label>
+     <span id="kickCountV24">0명 선택</span>
+     <button class="btn danger" id="kickSelectedV24" disabled>🚪 선택 학생 강퇴</button>
    </div>
-   <div class="player-select-list">${players.length?players.map(p=>`
-     <label class="player-select-row">
-       <input type="checkbox" class="kick-player" value="${p.id}">
-       <span class="player-avatar">${PETS[p.character_key]?.emoji||"🙂"}</span>
-       <span class="player-name">${esc(p.student_name)}</span>
+   <div class="kick-list">${players.length?players.map(p=>`
+     <label class="kick-row">
+       <input type="checkbox" class="kick-player-v24" value="${p.id}">
+       <span>${PETS[p.character_key]?.emoji||"🙂"}</span>
+       <b>${esc(p.student_name)}</b>
        <small>${esc(p.class_name)}</small>
      </label>`).join(""):`<p class="note">학생 입장을 기다리는 중…</p>`}</div>
-   <p class="note">${esc(ses.class_name)} · ${minutes}분 · 게임 시작 전에는 타이머가 흐르지 않습니다.</p>
- </div>`;
+ </div>`:"";
 
- const checks=[...document.querySelectorAll(".kick-player")];
- const all=$("#selectAllPlayers"),kick=$("#kickSelected"),count=$("#selectedPlayerCount");
- function syncKick(){
-   const selected=checks.filter(x=>x.checked);
-   count.textContent=`${selected.length}명 선택`;
-   kick.disabled=!selected.length;
-   if(all)all.checked=checks.length>0&&selected.length===checks.length;
+ h.innerHTML=`<div class="teacher-lobby">
+ <div class="lobby-head"><div><span>${playing?"현재 참가":"현재 접속"}</span><b>${players.length}명</b></div>
+ <div class="teacher-session-actions">${status==="waiting"?`<button class="btn" id="startAll" ${players.length?"":"disabled"}>▶ 게임 시작</button>`:playing?`<button class="btn danger" id="forceEnd">⏹ 게임 즉시 종료</button>`:`<span class="badge">게임 종료</span>`}</div></div>
+ ${kickBlock}
+ ${playing?`<div class="teacher-session-summary"><span>⏱ 남은 시간 <b>${formatTime(remaining)}</b></span>${allMainDone?`<strong>✅ 모두 본게임 완료 — 지금 종료 가능</strong>`:""}<div id="teacherPostGameControls"></div></div>`:""}
+ <div class="progress-table-wrap"><table><tr><th>학생</th><th>현재 상태</th><th>점수</th><th>정답</th></tr>
+ ${rows.length?rows.map(r=>`<tr><td>${esc(r.student_name)}</td><td>${statusLabel(r)}</td><td>${r.score}</td><td>${r.correct_count}/${r.total_count}</td></tr>`).join(""):players.map(p=>`<tr><td>${esc(p.student_name)}</td><td>⏳ 대기실</td><td>-</td><td>-</td></tr>`).join("")}
+ </table></div><p class="note">${esc(ses.class_name)} · ${minutes}분</p></div>`;
+
+ if(status==="waiting"){
+   const checks=[...document.querySelectorAll(".kick-player-v24")];
+   const all=$("#selectAllPlayersV24"),btn=$("#kickSelectedV24"),count=$("#kickCountV24");
+   const sync=()=>{const picked=checks.filter(x=>x.checked);count.textContent=`${picked.length}명 선택`;btn.disabled=!picked.length;if(all)all.checked=checks.length>0&&picked.length===checks.length;};
+   checks.forEach(x=>x.onchange=sync);
+   if(all)all.onchange=()=>{checks.forEach(x=>x.checked=all.checked);sync();};
+   if(btn)btn.onclick=async()=>{
+     const picked=checks.filter(x=>x.checked);
+     const ids=picked.map(x=>Number(x.value));
+     const names=picked.map(x=>x.closest(".kick-row").querySelector("b").textContent);
+     if(!ids.length)return;
+     if(!confirm(`${names.join(", ")} 학생을 대기실에서 강퇴할까요?`))return;
+     btn.disabled=true;btn.textContent="강퇴 중…";
+     const result=await kickSelectedPlayersV24(ses.id,ids);
+     if(!result.ok){alert(`강퇴 실패: ${result.message}`);return renderTeacherProgress(ses,minutes);}
+     await renderTeacherProgress(ses,minutes);
+   };
+   if($("#startAll"))$("#startAll").onclick=async()=>{
+     if(!confirm(`${players.length}명이 입장했습니다. 지금 동시에 시작할까요?`))return;
+     const x=await startRemoteSession(ses.id,minutes);if(!x)return alert("게임 시작 실패");
+     S.sessionEndsAt=new Date(x.ends_at).getTime();renderTeacherProgress(x,minutes);subscribeTeacherProgress(x,minutes);
+   };
  }
- checks.forEach(x=>x.onchange=syncKick);
- if(all)all.onchange=()=>{checks.forEach(x=>x.checked=all.checked);syncKick();};
-
- kick.onclick=async()=>{
-   const ids=checks.filter(x=>x.checked).map(x=>Number(x.value));
-   if(!ids.length)return;
-   const names=checks.filter(x=>x.checked).map(x=>x.closest(".player-select-row")?.querySelector(".player-name")?.textContent).filter(Boolean);
-   if(!confirm(`${names.join(", ")} 학생을 대기실에서 강퇴할까요?`))return;
-   kick.disabled=true;kick.textContent="강퇴 중…";
-   const result=await kickSelectedPlayers(ses.id,ids);
-   if(!result.ok){alert(`강퇴 실패: ${result.message}`);return renderTeacherLobby(ses,minutes);}
-   await renderTeacherLobby(ses,minutes);
- };
-
- $("#startAll").onclick=async()=>{
-   if(!confirm(`${players.length}명이 입장했습니다. 지금 동시에 게임을 시작할까요?`))return;
-   const started=await startRemoteSession(ses.id,minutes);
-   if(!started)return alert("게임 시작에 실패했습니다.");
-   S.sessionEndsAt=new Date(started.ends_at).getTime();
-   holder.innerHTML=`<div class="teacher-lobby"><h3>▶ 게임 진행 중</h3><p class="sub">${players.length}명이 같은 종료 시각을 사용합니다.</p></div>`;
+ if(playing&&$("#forceEnd"))$("#forceEnd").onclick=async()=>{
+   if(!confirm("남은 시간과 관계없이 지금 전 학생의 게임을 종료할까요?"))return;
+   const {error}=await supabaseClient.from("game_sessions").update({status:"finished",is_active:false}).eq("id",ses.id);
+   if(error)return alert("즉시 종료 실패");
+   alert("게임을 종료했습니다. 학생들은 순위 발표 대기 화면으로 이동합니다.");
+   renderTeacherProgress({...ses,status:"finished"},minutes);
  };
 }
