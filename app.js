@@ -1286,3 +1286,130 @@ document.addEventListener("click",async e=>{
    if(ses)renderTeacherProgress(ses,S.teacherSessionMinutes||ses.duration_minutes);
  },250);
 },true);
+
+
+// ===== v27: stable kick panel isolated from realtime progress rerenders =====
+S.kickSelectedIdsV27 = S.kickSelectedIdsV27 || new Set();
+
+async function fetchLobbyPlayersV27(sessionId){
+ const {data,error}=await supabaseClient.from("session_players")
+   .select("id,session_id,class_name,student_name,character_key")
+   .eq("session_id",sessionId).order("joined_at",{ascending:true});
+ if(error){console.error("LOBBY PLAYERS ERROR",error);return []}
+ return data||[];
+}
+
+function mountStableKickPanelV27(sessionId){
+ let panel=document.querySelector("#stableKickPanelV27");
+ if(!panel){
+   panel=document.createElement("div");
+   panel.id="stableKickPanelV27";
+   panel.className="kick-box stable-kick-v27";
+   const control=document.querySelector("#lobbyControl");
+   if(control) control.prepend(panel);
+ }
+ refreshStableKickPanelV27(sessionId);
+}
+
+async function refreshStableKickPanelV27(sessionId){
+ const panel=document.querySelector("#stableKickPanelV27");
+ if(!panel)return;
+ const players=await fetchLobbyPlayersV27(sessionId);
+
+ // Remove selections only for students who genuinely left the lobby.
+ const valid=new Set(players.map(p=>String(p.id)));
+ [...S.kickSelectedIdsV27].forEach(id=>{if(!valid.has(id))S.kickSelectedIdsV27.delete(id)});
+
+ panel.innerHTML=`<div class="stable-kick-title"><b>🚪 학생 강퇴</b><span>체크한 학생은 자동 새로고침 중에도 선택이 유지됩니다.</span></div>
+ <div class="kick-toolbar">
+   <label><input type="checkbox" id="selectAllV27"> 전체 선택</label>
+   <span id="kickCountV27">${S.kickSelectedIdsV27.size}명 선택</span>
+   <button class="btn danger" id="kickBtnV27" ${S.kickSelectedIdsV27.size?"":"disabled"}>🚪 선택 학생 강퇴</button>
+ </div>
+ <div class="kick-list">${players.length?players.map(p=>{
+   const checked=S.kickSelectedIdsV27.has(String(p.id));
+   return `<label class="kick-row ${checked?"selected":""}">
+     <input type="checkbox" class="kickCheckV27" value="${p.id}" ${checked?"checked":""}>
+     <span>${PETS[p.character_key]?.emoji||"🙂"}</span>
+     <b>${esc(p.student_name)}</b><small>${esc(p.class_name)}</small>
+   </label>`;
+ }).join(""):`<p class="note">학생 입장을 기다리는 중…</p>`}</div>`;
+
+ const checks=[...panel.querySelectorAll(".kickCheckV27")];
+ const all=panel.querySelector("#selectAllV27");
+ if(all)all.checked=checks.length>0&&checks.every(x=>x.checked);
+
+ checks.forEach(box=>{
+   box.onchange=()=>{
+     const id=String(box.value);
+     if(box.checked)S.kickSelectedIdsV27.add(id);else S.kickSelectedIdsV27.delete(id);
+     // Do NOT rerender the panel here; update only the row/count/button.
+     box.closest(".kick-row")?.classList.toggle("selected",box.checked);
+     const count=panel.querySelector("#kickCountV27");
+     const btn=panel.querySelector("#kickBtnV27");
+     if(count)count.textContent=`${S.kickSelectedIdsV27.size}명 선택`;
+     if(btn)btn.disabled=!S.kickSelectedIdsV27.size;
+     if(all)all.checked=checks.length>0&&checks.every(x=>x.checked);
+   };
+ });
+ if(all)all.onchange=()=>{
+   checks.forEach(box=>{
+     box.checked=all.checked;
+     const id=String(box.value);
+     if(all.checked)S.kickSelectedIdsV27.add(id);else S.kickSelectedIdsV27.delete(id);
+     box.closest(".kick-row")?.classList.toggle("selected",box.checked);
+   });
+   const count=panel.querySelector("#kickCountV27"),btn=panel.querySelector("#kickBtnV27");
+   if(count)count.textContent=`${S.kickSelectedIdsV27.size}명 선택`;
+   if(btn)btn.disabled=!S.kickSelectedIdsV27.size;
+ };
+
+ const btn=panel.querySelector("#kickBtnV27");
+ if(btn)btn.onclick=async()=>{
+   const ids=[...S.kickSelectedIdsV27].map(Number);
+   if(!ids.length)return;
+   const names=players.filter(p=>S.kickSelectedIdsV27.has(String(p.id))).map(p=>p.student_name);
+   if(!confirm(`${names.join(", ")} 학생을 대기실에서 강퇴할까요?`))return;
+   btn.disabled=true;btn.textContent="강퇴 중…";
+   const {data,error}=await supabaseClient.from("session_players")
+      .delete().eq("session_id",sessionId).in("id",ids).select("id");
+   if(error){console.error(error);btn.disabled=false;btn.textContent="🚪 선택 학생 강퇴";return alert(`강퇴 실패: ${error.message}`);}
+   const deleted=new Set((data||[]).map(x=>String(x.id)));
+   if(!deleted.size){btn.disabled=false;btn.textContent="🚪 선택 학생 강퇴";return alert("강퇴 처리된 학생이 없습니다.");}
+   deleted.forEach(id=>S.kickSelectedIdsV27.delete(id));
+   await refreshStableKickPanelV27(sessionId);
+ };
+}
+
+// Observe only actual lobby membership changes. This panel is NOT refreshed by the
+// teacher's progress timer, so a checked box cannot disappear every second.
+function subscribeStableKickPanelV27(sessionId){
+ try{if(S.kickTeacherChannelV27)supabaseClient.removeChannel(S.kickTeacherChannelV27)}catch(e){}
+ S.kickTeacherChannelV27=supabaseClient.channel(`teacher-kick-v27-${sessionId}-${Date.now()}`)
+ .on("postgres_changes",{event:"*",schema:"public",table:"session_players",filter:`session_id=eq.${sessionId}`},
+   ()=>refreshStableKickPanelV27(sessionId))
+ .subscribe();
+}
+
+// Wrap teacher progress: its normal contents may repaint, but the stable kick panel
+// is remounted afterward with selection state stored outside the DOM.
+if(typeof renderTeacherProgress==="function"){
+ const _teacherProgressV27=renderTeacherProgress;
+ renderTeacherProgress=async function(ses,minutes){
+   const result=await _teacherProgressV27.apply(this,arguments);
+   const latest=await getSessionById(ses.id);
+   if((latest?.status||ses.status)==="waiting"){
+     mountStableKickPanelV27(ses.id);
+     if(S._kickPanelSessionV27!==ses.id){
+       S._kickPanelSessionV27=ses.id;
+       subscribeStableKickPanelV27(ses.id);
+     }
+     // Hide old v24/v25 kick UI to prevent duplicate handlers.
+     const old=document.querySelector(".kick-box:not(#stableKickPanelV27)");
+     if(old)old.style.display="none";
+   }else{
+     document.querySelector("#stableKickPanelV27")?.remove();
+   }
+   return result;
+ };
+}

@@ -117,3 +117,8 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 @media(max-width:650px){.kick-toolbar .btn{width:100%}.kick-row{grid-template-columns:auto auto 1fr}.kick-row small{grid-column:3}}
 
 #kickSelectedV24:disabled{opacity:.55;cursor:not-allowed}
+
+.stable-kick-v27{display:block!important;margin:14px 0}
+.stable-kick-title{display:flex;flex-direction:column;gap:3px;margin-bottom:10px}
+.stable-kick-title span{font-size:12px;color:var(--muted)}
+.stable-kick-v27 .kick-row.selected{background:#eef4ff!important;border-color:#173b7a!important;box-shadow:0 0 0 1px #173b7a inset}
