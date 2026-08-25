@@ -73,3 +73,7 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 .player-chips{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0}.player-chips span{background:white;border:1px solid var(--line);border-radius:999px;padding:7px 10px;font-size:12px;font-weight:800}
 
 .teacher-session-actions{display:flex;gap:8px;flex-wrap:wrap}.teacher-session-summary{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#f5f3ff;border-radius:12px;padding:10px 12px;margin:12px 0;font-size:13px}.teacher-session-summary strong{color:#166534}.progress-table-wrap{overflow-x:auto;margin-top:12px}.progress-table-wrap table{min-width:560px}.btn.danger{background:#dc2626;color:white}
+
+.postgame-controls{margin-top:16px;padding:16px;border:2px solid #ddd6fe;border-radius:18px;background:#f5f3ff;display:flex;justify-content:space-between;align-items:center;gap:14px}
+.postgame-controls h3{margin:6px 0}.postgame-controls .sub{margin:0}
+@media(max-width:700px){.postgame-controls{display:block}.postgame-controls .btn{width:100%;margin-top:12px}}

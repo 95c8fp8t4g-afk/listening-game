@@ -441,7 +441,7 @@ async function renderTeacherProgress(ses,minutes){
  const status=latest?.status||ses.status,playing=status==="playing",finished=status==="finished";
  const allMainDone=rows.length>0&&rows.every(r=>["mini_game","stamp_done","waiting"].includes(r.activity_status));
  const remaining=latest?.ends_at?Math.max(0,new Date(latest.ends_at).getTime()-Date.now()):0;
- h.innerHTML=`<div class="teacher-lobby"><div class="lobby-head"><div><span>${playing?"현재 참가":"현재 접속"}</span><b>${players.length}명</b></div><div class="teacher-session-actions">${status==="waiting"?`<button class="btn" id="startAll" ${players.length?"":"disabled"}>▶ 게임 시작</button>`:playing?`<button class="btn danger" id="forceEnd">⏹ 게임 즉시 종료</button>`:`<span class="badge">게임 종료</span>`}</div></div>${playing?`<div class="teacher-session-summary"><span>⏱ 남은 시간 <b>${formatTime(remaining)}</b></span>${allMainDone?`<strong>✅ 모두 본게임 완료 — 지금 종료 가능</strong>`:""}</div>`:""}<div class="progress-table-wrap"><table><tr><th>학생</th><th>현재 상태</th><th>점수</th><th>정답</th></tr>${rows.length?rows.map(r=>`<tr><td>${esc(r.student_name)}</td><td>${statusLabel(r)}</td><td>${r.score}</td><td>${r.correct_count}/${r.total_count}</td></tr>`).join(""):players.map(p=>`<tr><td>${esc(p.student_name)}</td><td>⏳ 대기실</td><td>-</td><td>-</td></tr>`).join("")}</table></div><p class="note">${esc(ses.class_name)} · ${minutes}분</p></div>`;
+ h.innerHTML=`<div class="teacher-lobby"><div class="lobby-head"><div><span>${playing?"현재 참가":"현재 접속"}</span><b>${players.length}명</b></div><div class="teacher-session-actions">${status==="waiting"?`<button class="btn" id="startAll" ${players.length?"":"disabled"}>▶ 게임 시작</button>`:playing?`<button class="btn danger" id="forceEnd">⏹ 게임 즉시 종료</button>`:`<span class="badge">게임 종료</span>`}</div></div>${playing?`<div class="teacher-session-summary"><span>⏱ 남은 시간 <b>${formatTime(remaining)}</b></span>${allMainDone?`<strong>✅ 모두 본게임 완료 — 지금 종료 가능</strong>`:""}<div id="teacherPostGameControls"></div></div>`:""}<div class="progress-table-wrap"><table><tr><th>학생</th><th>현재 상태</th><th>점수</th><th>정답</th></tr>${rows.length?rows.map(r=>`<tr><td>${esc(r.student_name)}</td><td>${statusLabel(r)}</td><td>${r.score}</td><td>${r.correct_count}/${r.total_count}</td></tr>`).join(""):players.map(p=>`<tr><td>${esc(p.student_name)}</td><td>⏳ 대기실</td><td>-</td><td>-</td></tr>`).join("")}</table></div><p class="note">${esc(ses.class_name)} · ${minutes}분</p></div>`;
  if(status==="waiting"&&$("#startAll"))$("#startAll").onclick=async()=>{if(!confirm(`${players.length}명이 입장했습니다. 지금 동시에 시작할까요?`))return;const x=await startRemoteSession(ses.id,minutes);if(!x)return alert("게임 시작 실패");S.sessionEndsAt=new Date(x.ends_at).getTime();renderTeacherProgress(x,minutes);subscribeTeacherProgress(x,minutes)};
  if(playing&&$("#forceEnd"))$("#forceEnd").onclick=async()=>{if(!confirm("남은 시간과 관계없이 지금 전 학생의 게임을 종료할까요?"))return;const {error}=await supabaseClient.from("game_sessions").update({status:"finished",is_active:false}).eq("id",ses.id);if(error)return alert("즉시 종료 실패");alert("게임을 종료했습니다. 학생들은 순위 발표 대기 화면으로 이동합니다.");renderTeacherProgress({...ses,status:"finished"},minutes)};
 }
@@ -452,7 +452,37 @@ function subscribeTeacherProgress(ses,minutes){
 }
 function sessionManager(){
  $("#panel").innerHTML=`<div class="card"><span class="badge">GAME LOBBY</span><h2>수업 게임 설정</h2><p class="sub">대기실을 만든 뒤 학생 입장을 확인하고 ▶ 게임 시작을 누르세요. 시작 후에는 학생별 진행 상태를 실시간으로 확인하고 필요하면 즉시 종료할 수 있습니다.</p><div class="grid2"><div><label>학급</label><select id="sessionClass">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>플레이 시간</label><select id="playMinutes">${[5,10,15,20,25,30,40,45].map(m=>`<option value="${m}">${m}분</option>`).join("")}</select></div></div><div class="actions"><button class="btn" id="createLobby">① 대기실 만들기</button></div><div id="lobbyControl"></div></div>`;
- $("#createLobby").onclick=async()=>{const cls=$("#sessionClass").value,minutes=+$("#playMinutes").value,ses=await createWaitingSession(cls,minutes);if(!ses)return alert("대기실 생성 실패");S.sessionId=ses.id;S.teacherSessionMinutes=minutes;renderTeacherProgress(ses,minutes);subscribeTeacherProgress(ses,minutes)};
+ $("#createLobby").onclick=async()=>{const cls=$("#sessionClass").value,minutes=+$("#playMinutes").value,ses=await createWaitingSession(cls,minutes);if(!ses)return alert("대기실 생성 실패");S.sessionId=ses.id;S.teacherSessionMinutes=minutes;subscribeTeacherSessionStatus(ses.id);renderTeacherProgress(ses,minutes);subscribeTeacherProgress(ses,minutes)};
+}
+
+
+function subscribeTeacherSessionStatus(sessionId){
+ try{if(S.teacherSessionChannel)supabaseClient.removeChannel(S.teacherSessionChannel)}catch(e){}
+ S.teacherSessionChannel=supabaseClient.channel(`teacher-session-${sessionId}`)
+ .on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_sessions",filter:`id=eq.${sessionId}`},payload=>{
+   if(payload.new?.status==="finished")renderTeacherPostGameControls();
+ }).subscribe();
+}
+
+async function renderTeacherPostGameControls(){
+ const panel=document.querySelector("#teacherPostGameControls");
+ if(!panel||!S.sessionId)return;
+ const ses=await getSessionById(S.sessionId);
+ if(!ses)return;
+ if(ses.status==="finished"){
+   panel.innerHTML=`<div class="postgame-controls">
+     <div><span class="badge">GAME FINISHED</span><h3>게임 종료</h3><p class="sub">학생들은 순위 발표 대기 화면에 있습니다.</p></div>
+     <button class="btn" id="publishFinalRanking">🏆 랭킹 발표</button>
+   </div>`;
+   document.querySelector("#publishFinalRanking").onclick=async()=>{
+     if(await publishRemoteRanking()){
+       alert("학생들에게 최종 랭킹을 발표했습니다.");
+       renderTeacherPostGameControls();
+     }else alert("랭킹 발표에 실패했습니다.");
+   };
+ }else{
+   panel.innerHTML="";
+ }
 }
 function miniEditor(){
  $("#panel").innerHTML=`<div class="card"><span class="badge">VOCABULARY SHEET</span><h2>엑셀 단어장 업로드</h2>
@@ -526,3 +556,34 @@ function report(r){
  draw("all");
 }
 home();
+
+
+// v18 override: final ranking control is always available in teacher Ranking tab,
+// but publish button is enabled only after the game is finished.
+async function rankingManager(){
+ let sid=S.sessionId;
+ if(!sid && supabaseClient){
+   const {data}=await supabaseClient.from("game_sessions").select("id,status,class_name,started_at")
+     .order("created_at",{ascending:false}).limit(1).maybeSingle().catch?.(()=>({data:null})) || {};
+   sid=data?.id||null;
+   if(sid)S.sessionId=sid;
+ }
+ let ses=sid?await getSessionById(sid):null;
+ let rows=sid?await fetchRemoteRanking():[];
+ const finished=ses?.status==="finished";
+ $("#panel").innerHTML=`<div class="card"><span class="badge">RANKING CONTROL</span><h2>랭킹 관리</h2>
+ <p class="sub">${finished?"게임이 종료되었습니다. 교사가 전체 순위를 확인한 뒤 학생들에게 발표할 수 있습니다.":"게임 진행 중에는 최종 랭킹 발표 버튼이 잠겨 있습니다."}</p>
+ <div class="actions">
+   <button class="btn" id="publishRankingV18" ${finished?"":"disabled"}>🏆 랭킹 발표</button>
+ </div>
+ <div class="card" style="margin-top:16px"><span class="badge">FULL RANKING</span><h2>전체 학생 랭킹</h2>
+ ${rows.length?`<table><tr><th>등수</th><th>학급</th><th>이름</th><th>점수</th><th>정답</th><th>정답률</th></tr>
+ ${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.class_name)}</td><td>${esc(r.student_name)}</td><td>${r.score}</td><td>${r.correct_count}</td><td>${r.total_count?Math.round(r.correct_count/r.total_count*100):0}%</td></tr>`).join("")}</table>`:`<p class="sub">현재 학생 기록이 없습니다.</p>`}
+ </div></div>`;
+ const btn=$("#publishRankingV18");
+ if(btn)btn.onclick=async()=>{
+   if(!finished)return;
+   if(await publishRemoteRanking())alert("학생들에게 최종 랭킹을 발표했습니다.");
+   else alert("랭킹 발표에 실패했습니다.");
+ };
+}
