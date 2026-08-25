@@ -122,3 +122,7 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 .stable-kick-title{display:flex;flex-direction:column;gap:3px;margin-bottom:10px}
 .stable-kick-title span{font-size:12px;color:var(--muted)}
 .stable-kick-v27 .kick-row.selected{background:#eef4ff!important;border-color:#173b7a!important;box-shadow:0 0 0 1px #173b7a inset}
+
+#stableKickHostV28{min-height:0}
+#stableKickHostV28 .stable-kick-v27{margin:14px 0;contain:layout paint}
+#lobbyControl>.kick-box{display:none!important}

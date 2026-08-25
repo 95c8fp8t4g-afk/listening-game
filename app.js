@@ -1413,3 +1413,81 @@ if(typeof renderTeacherProgress==="function"){
    return result;
  };
 }
+
+
+// ===== v28: eliminate kick-panel flicker =====
+// The v27 panel was removed/recreated whenever renderTeacherProgress repainted #lobbyControl.
+// v28 moves it OUTSIDE #lobbyControl, so progress polling cannot destroy it.
+
+function ensureStableKickHostV28(){
+ let host=document.querySelector("#stableKickHostV28");
+ if(!host){
+   host=document.createElement("div");
+   host.id="stableKickHostV28";
+   const lobby=document.querySelector("#lobbyControl");
+   if(lobby) lobby.parentNode.insertBefore(host,lobby);
+ }
+ return host;
+}
+
+function mountStableKickPanelV27(sessionId){
+ const host=ensureStableKickHostV28();
+ if(!host)return;
+ let panel=document.querySelector("#stableKickPanelV27");
+ if(!panel){
+   panel=document.createElement("div");
+   panel.id="stableKickPanelV27";
+   panel.className="kick-box stable-kick-v27";
+   host.appendChild(panel);
+   refreshStableKickPanelV27(sessionId);
+ }
+ // Do not refresh on every progress repaint.
+}
+
+// Refresh only when membership actually changed.
+async function refreshStableKickPanelV28(sessionId){
+ const panel=document.querySelector("#stableKickPanelV27");
+ if(!panel)return;
+ const players=await fetchLobbyPlayersV27(sessionId);
+ const signature=players.map(p=>`${p.id}:${p.student_name}:${p.character_key}`).join("|");
+ if(S._kickRosterSignatureV28===signature)return;
+ S._kickRosterSignatureV28=signature;
+ await refreshStableKickPanelV27(sessionId);
+}
+
+function subscribeStableKickPanelV27(sessionId){
+ try{if(S.kickTeacherChannelV27)supabaseClient.removeChannel(S.kickTeacherChannelV27)}catch(e){}
+ S._kickRosterSignatureV28=null;
+ S.kickTeacherChannelV27=supabaseClient.channel(`teacher-kick-v28-${sessionId}-${Date.now()}`)
+ .on("postgres_changes",{event:"*",schema:"public",table:"session_players",filter:`session_id=eq.${sessionId}`},
+   ()=>refreshStableKickPanelV28(sessionId))
+ .subscribe();
+}
+
+// Final wrapper: after normal teacher progress repaint, keep kick host untouched.
+// Only mount once while waiting; remove once game starts.
+if(typeof renderTeacherProgress==="function"){
+ const _teacherProgressV28=renderTeacherProgress;
+ renderTeacherProgress=async function(ses,minutes){
+   const result=await _teacherProgressV28.apply(this,arguments);
+   const latest=await getSessionById(ses.id);
+   const status=latest?.status||ses.status;
+   // Hide legacy kick box inside lobbyControl every repaint.
+   document.querySelectorAll("#lobbyControl .kick-box").forEach(x=>x.style.display="none");
+   if(status==="waiting"){
+     const host=ensureStableKickHostV28();
+     if(host)host.style.display="block";
+     mountStableKickPanelV27(ses.id);
+     if(S._kickPanelSessionV28!==ses.id){
+       S._kickPanelSessionV28=ses.id;
+       S._kickRosterSignatureV28=null;
+       subscribeStableKickPanelV27(ses.id);
+       refreshStableKickPanelV28(ses.id);
+     }
+   }else{
+     const host=document.querySelector("#stableKickHostV28");
+     if(host)host.style.display="none";
+   }
+   return result;
+ };
+}
