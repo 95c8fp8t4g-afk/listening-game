@@ -1186,3 +1186,103 @@ async function renderTeacherProgress(ses,minutes){
    renderTeacherProgress({...ses,status:"finished"},minutes);
  };
 }
+
+
+// ===== v25: immediate realtime kick detection =====
+function stopKickWatchV25(){
+ clearInterval(S.kickPoll);S.kickPoll=null;
+ try{if(S.kickChannel)supabaseClient.removeChannel(S.kickChannel)}catch(e){}
+ S.kickChannel=null;
+}
+function handleKickedV25(){
+ if(S._kickHandled)return;
+ S._kickHandled=true;
+ stopKickWatchV25();
+ clearInterval(S.lobbyPoll);
+ try{if(S.lobbyChannel)supabaseClient.removeChannel(S.lobbyChannel)}catch(e){}
+ alert("선생님이 대기실에서 퇴장시켰습니다. 학급과 이름을 다시 설정해 주세요.");
+ S.sessionId=null;S.student=null;
+ home();
+ setTimeout(()=>{S._kickHandled=false},500);
+}
+async function verifyStillInLobbyV25(sessionId){
+ if(!S.student?.name||!sessionId)return;
+ const {data,error}=await supabaseClient.from("session_players")
+   .select("id").eq("session_id",sessionId)
+   .eq("class_name",S.student.className)
+   .eq("student_name",S.student.name).maybeSingle();
+ if(!error&&!data)handleKickedV25();
+}
+function subscribeStudentKickV25(sessionId){
+ stopKickWatchV25();
+ S._kickHandled=false;
+
+ // Primary path: Supabase Realtime DELETE event, filtered by session.
+ S.kickChannel=supabaseClient.channel(`kick-v25-${sessionId}-${Date.now()}`)
+   .on("postgres_changes",
+     {event:"DELETE",schema:"public",table:"session_players",filter:`session_id=eq.${sessionId}`},
+     ()=>verifyStillInLobbyV25(sessionId)
+   ).subscribe();
+
+ // Backup path: poll every 350ms so a missed realtime event still kicks quickly.
+ S.kickPoll=setInterval(()=>verifyStillInLobbyV25(sessionId),350);
+}
+
+function lobbyScreen(ses){
+ S.sessionId=ses.id;
+ layout(`<div class="card hero waiting-screen"><div class="waiting-icon">🎮</div><span class="badge">GAME LOBBY</span><h1>게임 대기실</h1><p class="sub"><b>${esc(S.student.name)}</b> 입장 완료!<br>선생님이 게임을 시작할 때까지 기다려 주세요.</p><div class="waiting-dots"><span></span><span></span><span></span></div><div class="note">시작 신호 대기 중…</div></div>`);
+
+ try{if(S.lobbyChannel)supabaseClient.removeChannel(S.lobbyChannel)}catch(e){}
+ S.lobbyChannel=supabaseClient.channel(`lobby-v25-${ses.id}-${Date.now()}`)
+   .on("postgres_changes",{event:"UPDATE",schema:"public",table:"game_sessions",filter:`id=eq.${ses.id}`},p=>{
+     if(p.new?.status==="playing"){
+       stopKickWatchV25();
+       clearInterval(S.lobbyPoll);
+       beginSharedGame(p.new);
+     }
+   }).subscribe();
+
+ clearInterval(S.lobbyPoll);
+ S.lobbyPoll=setInterval(async()=>{
+   const x=await getSessionById(ses.id);
+   if(x?.status==="playing"){
+     stopKickWatchV25();
+     clearInterval(S.lobbyPoll);
+     beginSharedGame(x);
+   }
+ },700);
+
+ subscribeStudentKickV25(ses.id);
+}
+
+// After teacher deletes players, wait for DB confirmation before repainting.
+async function kickSelectedPlayersV25(sessionId,ids){
+ const {data,error}=await supabaseClient.from("session_players")
+   .delete().eq("session_id",sessionId).in("id",ids).select("id");
+ if(error){console.error("KICK ERROR",error);return {ok:false,message:error.message}}
+ const deleted=(data||[]).map(x=>Number(x.id));
+ if(!deleted.length)return {ok:false,message:"Supabase에서 삭제된 학생을 확인하지 못했습니다."};
+ return {ok:true,deleted};
+}
+
+// Patch the v24 teacher kick button handler by delegation, taking priority.
+document.addEventListener("click",async e=>{
+ const btn=e.target.closest("#kickSelectedV24");
+ if(!btn)return;
+ e.preventDefault();e.stopImmediatePropagation();
+ const checks=[...document.querySelectorAll(".kick-player-v24:checked")];
+ const ids=checks.map(x=>Number(x.value));
+ const names=checks.map(x=>x.closest(".kick-row")?.querySelector("b")?.textContent).filter(Boolean);
+ if(!ids.length)return;
+ if(!confirm(`${names.join(", ")} 학생을 대기실에서 강퇴할까요?`))return;
+ btn.disabled=true;btn.textContent="강퇴 확인 중…";
+ const sid=S.sessionId;
+ const result=await kickSelectedPlayersV25(sid,ids);
+ if(!result.ok){btn.disabled=false;btn.textContent="🚪 선택 학생 강퇴";return alert(`강퇴 실패: ${result.message}`);}
+ // Teacher UI gets a quick local removal, then authoritative refresh.
+ checks.forEach(x=>x.closest(".kick-row")?.remove());
+ setTimeout(async()=>{
+   const ses=await getSessionById(sid);
+   if(ses)renderTeacherProgress(ses,S.teacherSessionMinutes||ses.duration_minutes);
+ },250);
+},true);
