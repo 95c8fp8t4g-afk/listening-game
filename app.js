@@ -285,6 +285,19 @@ async function beginSharedGame(ses){
  clearInterval(S.lobbyPoll);S.sessionId=ses.id;S.sessionEndsAt=new Date(ses.ends_at).getTime();S.timeExpired=false;S.resultWaiting=false;S.activityStatus="main_game";S.currentQuestion=1;S.miniStreak=0;
  await upsertRemoteScore(false);subscribeSession();question();
 }
+
+async function ensureTeacherResultBar(){
+ if(!S.sessionId||!supabaseClient)return;
+ const ses=await getSessionById(S.sessionId);
+ let bar=document.querySelector("#teacherResultBar");
+ if(!bar){bar=document.createElement("div");bar.id="teacherResultBar";bar.className="teacher-result-bar";document.body.appendChild(bar);}
+ if(ses?.status==="finished"&&!ses?.ranking_published){
+   bar.style.display="flex";
+   bar.innerHTML=`<div><b>🏁 게임 종료</b><span>학생들이 순위 발표를 기다리고 있습니다.</span></div><button class="btn" id="teacherPublishNow">🏆 랭킹 발표</button>`;
+   $("#teacherPublishNow").onclick=async()=>{if(await publishRemoteRanking()){bar.style.display="none";alert("랭킹을 발표했습니다.");}};
+ }else bar.style.display="none";
+}
+function watchTeacherSessionForResults(){clearInterval(S.teacherResultPoll);S.teacherResultPoll=setInterval(ensureTeacherResultBar,1000);ensureTeacherResultBar();}
 async function home(){
  await Promise.all([loadRemoteQuestions(),loadRemoteVocab()]);
  layout(`<div class="card hero"><span class="badge">🎧 LISTENING QUEST</span><h1>Choose. Play.<br>Grow!</h1><p class="sub">영어 문제를 풀고 점수를 모아 내 캐릭터를 진화시키세요.</p>
@@ -587,3 +600,80 @@ async function rankingManager(){
    else alert("랭킹 발표에 실패했습니다.");
  };
 }
+
+
+// ===== v19 teacher navigation + ranking fixes =====
+function setTeacherActiveTab(tabKey){
+ document.querySelectorAll("[data-tab]").forEach(el=>{
+   el.classList.toggle("active", el.dataset.tab===tabKey);
+ });
+}
+async function rankingManager(){
+ setTeacherActiveTab("ranking");
+ if(typeof watchTeacherSessionForResults==="function") watchTeacherSessionForResults();
+
+ let sid=S.sessionId;
+ if(!sid && supabaseClient){
+   const {data,error}=await supabaseClient.from("game_sessions")
+     .select("id,status,class_name,started_at,ranking_published,is_active")
+     .order("started_at",{ascending:false,nullsFirst:false})
+     .limit(10);
+   if(!error && data?.length){
+     const pick=data.find(x=>x.is_active) || data[0];
+     sid=pick.id; S.sessionId=sid;
+   }
+ }
+ const ses=sid?await getSessionById(sid):null;
+ const rows=sid?await fetchRemoteRanking():[];
+ const canPublish=ses?.status==="finished";
+
+ $("#panel").innerHTML=`<div class="card">
+   <span class="badge">RANKING CONTROL</span><h2>랭킹 관리</h2>
+   <p class="sub">${canPublish?"게임이 종료되었습니다. 전체 결과를 확인한 뒤 학생들에게 발표하세요.":"게임 진행 중입니다. 게임 종료 후 랭킹 발표 버튼이 활성화됩니다."}</p>
+   <button class="btn full" id="publishRankingV19" ${canPublish?"":"disabled"}>🏆 랭킹 발표</button>
+   <div class="card" style="margin-top:16px">
+     <h2>전체 학생 랭킹</h2>
+     ${rows.length?`<table><tr><th>등수</th><th>학급</th><th>이름</th><th>점수</th><th>정답</th><th>정답률</th></tr>
+       ${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.class_name)}</td><td>${esc(r.student_name)}</td><td>${r.score}</td><td>${r.correct_count}</td><td>${r.total_count?Math.round(r.correct_count/r.total_count*100):0}%</td></tr>`).join("")}
+       </table>`:`<p class="sub">현재 학생 기록이 없습니다.</p>`}
+   </div>
+ </div>`;
+ const b=$("#publishRankingV19");
+ if(b)b.onclick=async()=>{
+   if(!canPublish)return;
+   if(await publishRemoteRanking()) alert("학생들에게 최종 랭킹을 발표했습니다.");
+   else alert("랭킹 발표에 실패했습니다.");
+ };
+}
+function bindTeacherTabsV19(){
+ const tabs=document.querySelectorAll("[data-tab]");
+ tabs.forEach(tab=>{
+   tab.onclick=()=>{
+     const key=tab.dataset.tab;
+     setTeacherActiveTab(key);
+     if(key==="ranking") return rankingManager();
+     if(key==="session" && typeof sessionManager==="function") return sessionManager();
+     if(key==="questions" && typeof editor==="function") return editor();
+     if(key==="mini" && typeof miniEditor==="function") return miniEditor();
+     if(key==="reports" && typeof reports==="function") return reports();
+   };
+ });
+}
+
+document.addEventListener("click",e=>{
+ const el=e.target.closest("button,.tab,.teacher-tab,[data-tab]");
+ if(!el)return;
+ const txt=(el.textContent||"").trim();
+ if(/랭킹\s*관리/.test(txt)){
+   e.preventDefault();e.stopPropagation();
+   setTeacherActiveTab("ranking");
+   rankingManager();
+ }
+ // active visual state for teacher navigation
+ const parent=el.parentElement;
+ if(parent && (parent.querySelectorAll(".tab,.teacher-tab,[data-tab]").length>1)){
+   parent.querySelectorAll(".tab,.teacher-tab,[data-tab]").forEach(x=>x.classList.remove("active"));
+   el.classList.add("active");
+ }
+},true);
+setTimeout(()=>{try{bindTeacherTabsV19()}catch(e){}},300);
