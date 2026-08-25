@@ -765,3 +765,206 @@ async function reports(){
  document.querySelectorAll("#reportClassTabs .class-tab").forEach(b=>b.onclick=()=>show(b.dataset.class));
  show("2학년 1반");
 }
+
+
+// ===== v21: reliable persistence, play time, class reset =====
+
+// Preserve the shared server start time as the source of truth.
+async function beginSharedGame(ses){
+ clearInterval(S.lobbyPoll);S.lobbyPoll=null;
+ S.sessionId=ses.id;
+ S.sessionEndsAt=new Date(ses.ends_at).getTime();
+ S.sessionDurationMinutes=Number(ses.duration_minutes)||null;
+ S.gameStartedAt=ses.started_at ? new Date(ses.started_at).getTime() : Date.now();
+ S.timeExpired=false;
+ S.activityStatus="main_game";
+ S.mainFinishedAt=null;
+ await upsertRemoteScore(false);
+ subscribeSession();
+ question();
+}
+
+// Always read server session start when calculating play time.
+async function calculateMainPlaySeconds(){
+ if(!S.sessionId)return null;
+ let startMs=S.gameStartedAt||null;
+ if(!startMs){
+   const ses=await getSessionById(S.sessionId);
+   if(ses?.started_at)startMs=new Date(ses.started_at).getTime();
+ }
+ if(!startMs)return null;
+ const endMs=S.mainFinishedAt||Date.now();
+ return Math.max(0,Math.round((endMs-startMs)/1000));
+}
+
+async function upsertRemoteScore(finished=false){
+ if(!supabaseClient||!S.student||!S.sessionId)return;
+ const total=(S.playQuestions||[]).length||0;
+ const correct=Number(S.correct)||0;
+ const accuracy=total?Math.round(correct/total*100):0;
+
+ let playSeconds=null;
+ let mainFinishedAt=null;
+ if(S.mainFinishedAt){
+   playSeconds=await calculateMainPlaySeconds();
+   mainFinishedAt=new Date(S.mainFinishedAt).toISOString();
+ }
+
+ const row={
+   session_id:S.sessionId,
+   class_name:S.student.className,
+   student_name:S.student.name,
+   character_key:S.student.pet,
+   score:Number(S.score)||0,
+   correct_count:correct,
+   total_count:total,
+   finished:!!finished,
+   activity_status:S.activityStatus||"main_game",
+   current_question:Math.min((Number(S.q)||0)+1,total),
+   mini_streak:Number(S.miniStreak)||0,
+   accuracy,
+   main_finished_at:mainFinishedAt,
+   play_time_seconds:playSeconds,
+   last_activity_at:new Date().toISOString(),
+   updated_at:new Date().toISOString()
+ };
+ const {error}=await supabaseClient.from("student_scores")
+   .upsert(row,{onConflict:"session_id,class_name,student_name"});
+ if(error)console.error("student_scores save failed:",error);
+}
+
+// Call exactly when the main game is completed, before mini-game time begins.
+async function markMainGameFinished(){
+ if(!S.mainFinishedAt)S.mainFinishedAt=Date.now();
+ S.activityStatus="mini_game";
+ await upsertRemoteScore(true);
+}
+
+// If the original results() exists, wrap it instead of relying on brittle source replacement.
+if(typeof results==="function"){
+ const _v21Results=results;
+ results=function(){
+   if(!S.mainFinishedAt){
+     S.mainFinishedAt=Date.now();
+     S.activityStatus="mini_game";
+     upsertRemoteScore(true);
+   }
+   return _v21Results.apply(this,arguments);
+ };
+}
+
+function formatPlayTime(sec){
+ if(sec===null||sec===undefined||sec==="")return "-";
+ const n=Math.max(0,Number(sec)||0);
+ const m=Math.floor(n/60),s=Math.floor(n%60);
+ return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+
+async function latestSessionForClass(className){
+ const {data,error}=await supabaseClient.from("game_sessions")
+   .select("*").eq("class_name",className)
+   .order("started_at",{ascending:false,nullsFirst:false}).limit(1);
+ if(error){console.error(error);return null}
+ return data?.[0]||null;
+}
+
+async function classRankingRows(className){
+ const ses=await latestSessionForClass(className);
+ if(!ses)return {session:null,rows:[]};
+ const {data,error}=await supabaseClient.from("student_scores")
+   .select("*").eq("session_id",ses.id)
+   .order("score",{ascending:false})
+   .order("play_time_seconds",{ascending:true,nullsFirst:false});
+ if(error){console.error(error);return {session:ses,rows:[]}}
+ return {session:ses,rows:data||[]};
+}
+
+// Completely delete one class's scores, lobby records, and sessions.
+// This intentionally also removes that class's historical reports.
+async function resetClassRecords(className){
+ const {data:sessions,error:e1}=await supabaseClient.from("game_sessions")
+   .select("id").eq("class_name",className);
+ if(e1){console.error(e1);return {ok:false,message:"세션 조회 실패"}}
+ const ids=(sessions||[]).map(x=>x.id);
+
+ if(ids.length){
+   const {error:e2}=await supabaseClient.from("student_scores").delete().in("session_id",ids);
+   if(e2){console.error(e2);return {ok:false,message:"학생 점수 삭제 실패"}}
+
+   const {error:e3}=await supabaseClient.from("session_players").delete().in("session_id",ids);
+   if(e3){console.error(e3);return {ok:false,message:"대기실 기록 삭제 실패"}}
+
+   const {error:e4}=await supabaseClient.from("game_sessions").delete().in("id",ids);
+   if(e4){console.error(e4);return {ok:false,message:"게임 세션 삭제 실패"}}
+ }
+ return {ok:true};
+}
+
+async function rankingManager(){
+ setTeacherActiveTab("ranking");
+ if(typeof watchTeacherSessionForResults==="function")watchTeacherSessionForResults();
+
+ $("#panel").innerHTML=`<div class="card"><span class="badge">RANKING BY CLASS</span><h2>랭킹 관리</h2>
+ <p class="sub">각 반의 최근 게임 결과만 표시합니다. 기록 초기화는 해당 반의 랭킹과 리포트를 모두 삭제합니다.</p>
+ <div class="class-tabs" id="rankClassTabs">${[...Array(11)].map((_,i)=>`<button class="class-tab ${i===0?"active":""}" data-class="2학년 ${i+1}반">${i+1}반</button>`).join("")}</div>
+ <div id="classRankingBody"><p class="sub">랭킹을 불러오는 중…</p></div></div>`;
+
+ async function show(cls){
+   document.querySelectorAll("#rankClassTabs .class-tab").forEach(x=>x.classList.toggle("active",x.dataset.class===cls));
+   const {session,rows}=await classRankingRows(cls);
+   const body=$("#classRankingBody");
+
+   body.innerHTML=`<div class="rank-tools">
+     <div><b>${esc(cls)}</b><span>${session?(session.status==="finished"?"게임 종료":"게임 진행/대기 중"):"기록 없음"}</span></div>
+     <div class="rank-tool-buttons">
+       ${session?`<button class="btn" id="publishClassRank" ${session.status==="finished"&&!session.ranking_published?"":"disabled"}>🏆 랭킹 발표</button>`:""}
+       <button class="btn danger" id="resetClassRank">🗑️ ${esc(cls.replace("2학년 ",""))} 기록 전체 초기화</button>
+     </div>
+   </div>
+   ${rows.length?`<div class="table-wrap"><table><tr><th>등수</th><th>이름</th><th>점수</th><th>플레이 타임</th><th>정답</th><th>정답률</th></tr>
+   ${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.student_name)}</td><td>${r.score}</td><td>${formatPlayTime(r.play_time_seconds)}</td><td>${r.correct_count}/${r.total_count}</td><td>${r.accuracy??(r.total_count?Math.round(r.correct_count/r.total_count*100):0)}%</td></tr>`).join("")}</table></div>`:`<div class="empty-report">${esc(cls)}에 저장된 랭킹 기록이 없습니다.</div>`}`;
+
+   const pb=$("#publishClassRank");
+   if(pb)pb.onclick=async()=>{S.sessionId=session.id;if(await publishRemoteRanking()){alert(`${cls} 랭킹을 발표했습니다.`);show(cls);}};
+
+   $("#resetClassRank").onclick=async()=>{
+     const ok=confirm(`${cls}의 랭킹과 모든 플레이 리포트를 삭제할까요?\n\n삭제한 기록은 복구할 수 없습니다.`);
+     if(!ok)return;
+     const typed=confirm(`정말 ${cls} 기록을 전체 초기화할까요?`);
+     if(!typed)return;
+     const result=await resetClassRecords(cls);
+     if(result.ok){if(S.sessionId===session?.id)S.sessionId=null;alert(`${cls} 기록을 모두 초기화했습니다.`);show(cls);}
+     else alert(`초기화하지 못했습니다: ${result.message}`);
+   };
+ }
+ document.querySelectorAll("#rankClassTabs .class-tab").forEach(b=>b.onclick=()=>show(b.dataset.class));
+ show("2학년 1반");
+}
+
+async function reports(){
+ setTeacherActiveTab("reports");
+ $("#panel").innerHTML=`<div class="card"><span class="badge">SUPABASE REPORTS</span><h2>학생 플레이 리포트</h2>
+ <p class="sub">학생이 실제 플레이하면서 Supabase에 저장한 기록을 반별로 표시합니다.</p>
+ <div class="class-tabs" id="reportClassTabs">${[...Array(11)].map((_,i)=>`<button class="class-tab ${i===0?"active":""}" data-class="2학년 ${i+1}반">${i+1}반</button>`).join("")}</div>
+ <div id="reportBody"><p class="sub">리포트를 불러오는 중…</p></div></div>`;
+
+ async function show(cls){
+   document.querySelectorAll("#reportClassTabs .class-tab").forEach(x=>x.classList.toggle("active",x.dataset.class===cls));
+   const {data,error}=await supabaseClient.from("student_scores")
+     .select("student_name,score,play_time_seconds,correct_count,total_count,accuracy,finished,activity_status,updated_at,session_id")
+     .eq("class_name",cls).order("updated_at",{ascending:false});
+   const body=$("#reportBody");
+   if(error){console.error(error);body.innerHTML=`<div class="empty-report">리포트를 불러오지 못했습니다.</div>`;return;}
+   if(!data?.length){body.innerHTML=`<div class="empty-report">아직 ${esc(cls)} 플레이 기록이 없습니다.</div>`;return;}
+
+   body.innerHTML=`<div class="report-summary">
+     <div><span>플레이 기록</span><b>${data.length}</b></div>
+     <div><span>평균 정답률</span><b>${Math.round(data.reduce((a,r)=>a+(r.accuracy??(r.total_count?Math.round(r.correct_count/r.total_count*100):0)),0)/data.length)}%</b></div>
+     <div><span>평균 점수</span><b>${Math.round(data.reduce((a,r)=>a+(Number(r.score)||0),0)/data.length)}</b></div>
+   </div>
+   <div class="table-wrap"><table><tr><th>학생</th><th>점수</th><th>플레이 타임</th><th>정답</th><th>정답률</th><th>상태</th><th>최근 저장</th></tr>
+   ${data.map(r=>`<tr><td>${esc(r.student_name)}</td><td>${r.score}</td><td>${formatPlayTime(r.play_time_seconds)}</td><td>${r.correct_count}/${r.total_count}</td><td>${r.accuracy??(r.total_count?Math.round(r.correct_count/r.total_count*100):0)}%</td><td>${r.finished?"완료":esc(r.activity_status||"진행 중")}</td><td>${new Date(r.updated_at).toLocaleString("ko-KR")}</td></tr>`).join("")}</table></div>`;
+ }
+ document.querySelectorAll("#reportClassTabs .class-tab").forEach(b=>b.onclick=()=>show(b.dataset.class));
+ show("2학년 1반");
+}
