@@ -1493,3 +1493,69 @@ editor=function(){
    localStorage.setItem("LQ_questions",JSON.stringify(questions));editor();
  }};
 };
+
+// ===== v31: stable isolated question editor =====
+function q31clone(q){return JSON.parse(JSON.stringify(q||{}))}
+function q31shape(q){q=q31clone(q);q.type=q.type||'order';q.round=q.round||'Question';q.title=q.title||'';q.enabled=!!q.enabled;q.fixed=Array.isArray(q.fixed)?q.fixed:[];q.options=Array.isArray(q.options)?q.options:[];if(q.type==='order'){q.answer=Array.isArray(q.answer)?q.answer:[];q.items=[...q.answer]}else if(q.type==='choice'){if(typeof q.answer!=='string')q.answer=q.answer?.value||''}else q.target=q.target||'';return q}
+questions=questions.map(q31shape);
+function q31fields(q,i){if(q.type==='order')return `<div class="order-editor-v30"><label>① 학생에게 먼저 보여줄 대화 <small>(순서 고정 · 한 줄에 한 문장)</small></label><textarea data-fixed-lines="${i}">${esc((q.fixed||[]).join('\n'))}</textarea><label>② 학생이 순서를 맞출 대화 <small>(한 줄에 한 문장 · 입력 순서가 정답)</small></label><textarea data-lines="${i}">${esc((q.answer||[]).join('\n'))}</textarea><p class="order-editor-help">①은 그대로 제시되고 ②만 섞여서 출제됩니다.</p></div>`;if(q.type==='choice')return `<label>선택지 (한 줄에 하나)</label><textarea data-options="${i}">${esc((q.options||[]).join('\n'))}</textarea><label>정답</label><input data-answer="${i}" value="${esc(q.answer||'')}">`;return `<label>학생이 읽을 목표 문장</label><input data-target="${i}" value="${esc(q.target||'')}">`}
+function q31collect(i){let q=q31shape(questions[i]);const t=document.querySelector(`[data-type="${i}"]`),title=document.querySelector(`[data-title="${i}"]`),en=document.querySelector(`[data-enabled="${i}"]`);if(t)q.type=t.value;if(title)q.title=title.value.trim();if(en)q.enabled=en.checked;if(q.type==='order'){q.fixed=(document.querySelector(`[data-fixed-lines="${i}"]`)?.value||'').split('\n').map(x=>x.trim()).filter(Boolean);q.answer=(document.querySelector(`[data-lines="${i}"]`)?.value||'').split('\n').map(x=>x.trim()).filter(Boolean);q.items=[...q.answer]}else if(q.type==='choice'){q.options=(document.querySelector(`[data-options="${i}"]`)?.value||'').split('\n').map(x=>x.trim()).filter(Boolean);q.answer=(document.querySelector(`[data-answer="${i}"]`)?.value||'').trim()}else q.target=(document.querySelector(`[data-target="${i}"]`)?.value||'').trim();return q31shape(q)}
+async function q31save(i,q){if(!supabaseClient)return {ok:true};const row={question_no:i+1,type:q.type,round_name:q.round||'Question',title:q.title||'',target:q.type==='speak'?(q.target||null):null,options:q.type==='choice'?(q.options||[]):[],answer:q.type==='order'?{fixed:q.fixed||[],order:q.answer||[]}:q.type==='choice'?{value:q.answer||''}:null,enabled:!!q.enabled,updated_at:new Date().toISOString()};const {error}=await supabaseClient.from('game_questions').upsert(row,{onConflict:'question_no'});return error?{ok:false,message:error.message}:{ok:true}}
+editor=function(){questions=questions.map(q31shape);$('#panel').innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2><p class="sub">문제 유형을 바꾸면 해당 문제의 입력 폼만 즉시 변경됩니다. 각 문제는 독립적으로 저장할 수 있습니다.</p>${questions.map((q,i)=>`<div class="editor question-editor-v31" data-card="${i}"><div class="q31head"><b>Q${i+1}</b><span id="q31state${i}" class="q31state"></span><label><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?'checked':''}> 학생에게 출제</label></div><div class="row"><div><label>유형</label><select data-type="${i}"><option value="order" ${q.type==='order'?'selected':''}>대화 순서</option><option value="choice" ${q.type==='choice'?'selected':''}>객관식/빈칸</option><option value="speak" ${q.type==='speak'?'selected':''}>음성 인식</option></select></div><div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div></div><div id="q31fields${i}">${q31fields(q,i)}</div><div class="q31save"><button class="btn secondary" data-save-one="${i}">💾 Q${i+1} 저장</button></div></div>`).join('')}<div class="actions"><button class="btn secondary" id="reset">기본 문제 복원</button><button class="btn" id="q31saveAll">💾 전체 문제 저장</button></div></div>`;
+document.querySelectorAll('[data-type]').forEach(sel=>sel.onchange=()=>{const i=+sel.dataset.type;let q=q31collect(i);q.type=sel.value;questions[i]=q31shape(q);document.querySelector(`#q31fields${i}`).innerHTML=q31fields(questions[i],i);const s=$(`#q31state${i}`);if(s){s.textContent='저장 필요';s.className='q31state dirty'}});
+document.querySelectorAll('[data-card]').forEach(card=>card.addEventListener('input',()=>{const i=+card.dataset.card,s=$(`#q31state${i}`);if(s){s.textContent='저장 필요';s.className='q31state dirty'}}));
+document.querySelectorAll('[data-save-one]').forEach(btn=>btn.onclick=async()=>{const i=+btn.dataset.saveOne,q=q31collect(i),old=btn.textContent;btn.disabled=true;btn.textContent='저장 중…';const r=await q31save(i,q);if(r.ok){questions[i]=q31clone(q);localStorage.setItem('LQ_questions',JSON.stringify(questions));const s=$(`#q31state${i}`);if(s){s.textContent='✓ 저장됨';s.className='q31state saved'}}else alert(`Q${i+1} 저장 실패: ${r.message}`);btn.disabled=false;btn.textContent=old});
+$('#q31saveAll').onclick=async()=>{const draft=questions.map((_,i)=>q31collect(i)),b=$('#q31saveAll');b.disabled=true;b.textContent='전체 저장 중…';for(let i=0;i<draft.length;i++){const r=await q31save(i,draft[i]);if(!r.ok){b.disabled=false;b.textContent='💾 전체 문제 저장';return alert(`Q${i+1} 저장 실패: ${r.message}`)}}questions=draft.map(q31clone);localStorage.setItem('LQ_questions',JSON.stringify(questions));document.querySelectorAll('.q31state').forEach(s=>{s.textContent='✓ 저장됨';s.className='q31state saved'});b.disabled=false;b.textContent='💾 전체 문제 저장';alert('전체 문제가 저장되었습니다.')};
+$('#reset').onclick=()=>{if(confirm('기본 문제로 되돌릴까요?')){questions=JSON.parse(JSON.stringify(DEFAULT)).map(q31shape);localStorage.setItem('LQ_questions',JSON.stringify(questions));editor()}};
+};
+
+
+// ===== v32: simple editor — one save button only =====
+editor=function(){
+ questions=questions.map(ensureQuestionShapeV31);
+ $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2>
+ <p class="sub">문제를 자유롭게 수정한 뒤 맨 아래의 전체 문제 저장 버튼을 한 번만 누르면 현재 화면 상태 그대로 저장됩니다.</p>
+ ${questions.map((q,i)=>`<div class="editor question-editor-v31" data-question-card="${i}">
+   <div class="question-editor-head"><b>Q${i+1}</b>
+   <label><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label></div>
+   <div class="row"><div><label>유형</label><select data-type="${i}">
+    <option value="order" ${q.type==="order"?"selected":""}>대화 순서</option>
+    <option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option>
+    <option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option>
+   </select></div><div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div></div>
+   <div id="questionFields${i}">${questionFieldsV31(q,i)}</div>
+ </div>`).join("")}
+ <div class="actions"><button class="btn secondary" id="reset">기본 문제 복원</button><button class="btn" id="saveAllV32">💾 전체 문제 저장</button></div>
+ <p class="note">유형을 바꾸면 해당 문제의 입력 폼만 바뀝니다. 저장 버튼을 누르기 전까지 다른 문제에는 영향을 주지 않습니다.</p></div>`;
+
+ // Switch only this question's form. Do not rerender the full editor.
+ document.querySelectorAll("[data-type]").forEach(sel=>sel.onchange=()=>{
+   const i=+sel.dataset.type;
+   const q=collectQuestionV31(i);
+   q.type=sel.value;
+   questions[i]=ensureQuestionShapeV31(q);
+   document.querySelector(`#questionFields${i}`).innerHTML=questionFieldsV31(questions[i],i);
+ });
+
+ $("#saveAllV32").onclick=async()=>{
+   const draft=questions.map((_,i)=>collectQuestionV31(i));
+   const button=$("#saveAllV32");
+   button.disabled=true;button.textContent="저장 중…";
+   for(let i=0;i<draft.length;i++){
+     const result=await saveOneQuestionRemoteV31(i,draft[i]);
+     if(!result.ok){
+       button.disabled=false;button.textContent="💾 전체 문제 저장";
+       return alert(`Q${i+1} 저장 실패: ${result.message}`);
+     }
+   }
+   questions=draft.map(cloneQuestionV31);
+   localStorage.setItem("LQ_questions",JSON.stringify(questions));
+   button.disabled=false;button.textContent="💾 전체 문제 저장";
+   alert("현재 문제 설정이 그대로 저장되었습니다.");
+ };
+
+ $("#reset").onclick=()=>{if(confirm("기본 문제로 되돌릴까요?")){
+   questions=JSON.parse(JSON.stringify(DEFAULT)).map(ensureQuestionShapeV31);
+   localStorage.setItem("LQ_questions",JSON.stringify(questions));editor();
+ }};
+};
