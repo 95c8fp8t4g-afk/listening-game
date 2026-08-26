@@ -304,7 +304,7 @@ async function home(){
  <div class="grid2"><div><label>학급</label><select id="cls">${[...Array(11)].map((_,i)=>`<option>2학년 ${i+1}반</option>`).join("")}</select></div><div><label>이름</label><input id="nm" placeholder="이름"></div></div>
  <label>캐릭터 선택</label><div class="chars">${Object.entries(PETS).map(([k,p],i)=>`<button class="char ${i===0?"sel":""}" data-p="${k}"><div class="emoji">${p.stages[0][0]}</div><b>${p.name}</b><span class="note">${p.stages.map(x=>x[1]).join(" → ")}</span></button>`).join("")}</div>
  <button class="btn full" id="go">GAME START →</button><button class="teacher-icon" id="teacher" title="교사용">⚙️</button>
- <p class="note">진화 기준: 600점 / 1,200점 · 정답 기본 점수: 60점 · 속도/콤보 보너스는 소폭 적용</p></div>`);
+ <p class="note">진화 기준: 400점 / 800점 · 정답 점수: 최대 60점 · 10초마다 10점 감소</p></div>`);
  let pet="chicken";document.querySelectorAll(".char").forEach(b=>b.onclick=()=>{pet=b.dataset.p;document.querySelectorAll(".char").forEach(x=>x.classList.remove("sel"));b.classList.add("sel")});
  $("#go").onclick=async()=>{let name=$("#nm").value.trim();if(!name)return alert("이름을 입력해 주세요.");
  let aq=activeQuestions();if(!aq.length)return alert("교사가 아직 문제를 등록하지 않았습니다.");
@@ -1625,3 +1625,118 @@ editor=function(){
    editor();
  };
 };
+
+
+// ===== v35: fix invisible order questions / prevent free points =====
+function prepareOrderV35(q){
+ q=q||{};
+ q.fixed=Array.isArray(q.fixed)?q.fixed:[];
+ q.answer=Array.isArray(q.answer)?q.answer:[];
+ // Always build the student's sortable list from the saved correct-order array.
+ // Never trust an old/empty q.items value.
+ q.items=shuffle([...q.answer]);
+ return q;
+}
+
+question=function(){
+ if(S.timeExpired||remainingMs()<=0){S.timeExpired=true;return waitForRankingScreen();}
+ S.activityStatus="main_game";S.currentQuestion=S.q+1;S.miniStreak=0;upsertRemoteScore(false);
+ S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();
+ let q=S.playQuestions[S.q];
+
+ if(q.type==="order"){
+   q=prepareOrderV35(q);
+   S.playQuestions[S.q]=q;
+   S.order=[...q.items];
+   order(q);
+ }else if(q.type==="choice")choice(q);
+ else speak(q);
+};
+
+order=function(q){
+ q=prepareOrderV35(q);
+
+ // A malformed/empty order question can never award points.
+ if(!q.answer.length){
+   chrome(`<div class="round">${esc(q.round||"Question")}</div>
+     <div class="prompt">${esc(q.title||"대화 순서 맞추기")}</div>
+     <div class="feedback bad">이 문제의 순서 맞추기 문장이 저장되지 않았습니다.<br>선생님에게 알려 주세요.</div>
+     <div class="actions"><button class="btn" id="skipBrokenOrderV35">다음 문제 →</button></div>`);
+   $("#skipBrokenOrderV35").onclick=()=>{
+     S.answers.push({q:S.q+1,type:"order",correct:false,response:"EMPTY_ORDER_DATA",points:0});
+     S.combo=0;updateLiveSession();upsertRemoteScore(false);next();
+   };
+   return;
+ }
+
+ // If an old call to order() occurs after moving a line, keep the current student order.
+ if(!Array.isArray(S.order)||S.order.length!==q.answer.length)S.order=shuffle([...q.answer]);
+
+ const fixedHTML=q.fixed.length?`
+   <div class="dialogue-context">
+     <div class="dialogue-context-label">📌 먼저 제시되는 대화</div>
+     ${q.fixed.map((x,i)=>`<div class="fixed-dialogue-line"><span>${i+1}</span><p>${esc(x)}</p></div>`).join("")}
+   </div>
+   <div class="order-guide">👇 이어질 대화의 순서를 맞춰 보세요.</div>`:"";
+
+ chrome(`<div class="round">${esc(q.round||"Question")}</div>
+   <div class="prompt">${esc(q.title||"대화 순서를 맞춰 보세요.")}</div>
+   ${fixedHTML}
+   <div class="sortable-dialogue">
+     ${S.order.map((x,i)=>`<div class="order"><span>${q.fixed.length+i+1}. ${esc(x)}</span><div><button class="icon" data-u="${i}">↑</button> <button class="icon" data-d="${i}">↓</button></div></div>`).join("")}
+   </div>
+   <div class="actions"><button class="btn" id="check">CHECK</button></div>`);
+
+ document.querySelectorAll("[data-u]").forEach(b=>b.onclick=()=>mv(+b.dataset.u,-1,q));
+ document.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>mv(+b.dataset.d,1,q));
+ $("#check").onclick=()=>{
+   if(!S.order.length)return alert("순서를 맞출 문장이 없습니다.");
+   finish(JSON.stringify(S.order)===JSON.stringify(q.answer),[...q.fixed,...S.order].join(" | "));
+ };
+};
+
+
+// ===== v36: evolution 400/800 + time-based points =====
+function stage(score){return score>=800?2:score>=400?1:0}
+function petInfo(){
+ let p=PETS[S.student.pet],i=stage(S.score),next=i===0?400:i===1?800:800,base=i===0?0:i===1?400:800;
+ return {p,i,emoji:p.stages[i][0],name:p.stages[i][1],pct:i===2?100:Math.min(100,(S.score-base)/(next-base)*100),next};
+}
+
+// Correct-answer score starts at 60 and drops by 10 for every completed 10 seconds.
+// 0–9.999s:60, 10–19.999s:50, 20–29.999s:40, 30–39.999s:30,
+// 40–49.999s:20, 50s+:10 minimum.
+function speedBonus(){
+ const sec=Math.max(0,(Date.now()-(S.questionStartedAt||Date.now()))/1000);
+ const points=Math.max(10,60-Math.floor(sec/10)*10);
+ return {points,label:`⏱ 속도 점수 +${points}`};
+}
+
+function finish(ok,response){
+ let before=stage(S.score),gain=0,bonus={points:0,label:""};
+ if(ok){
+   S.correct++;S.combo++;
+   bonus=speedBonus();
+   gain=bonus.points;
+   S.score+=gain;
+ }else S.combo=0;
+ S.answers.push({q:S.q+1,type:S.playQuestions[S.q].type,correct:ok,response,points:gain,speedBonus:bonus.points});
+ updateLiveSession();upsertRemoteScore(false);
+ let after=stage(S.score),msg=ok?`✓ 정답! +${gain}점<br>${bonus.label}`:"✕ 아쉬워요. 다음 문제에 도전!";
+ $(".card").insertAdjacentHTML("beforeend",`<div class="feedback ${ok?"ok":"bad"}">${msg}</div><div class="actions"><button class="btn" id="next">NEXT →</button></div>`);
+ $("#check")?.remove();document.querySelectorAll(".option,.icon").forEach(x=>x.disabled=true);$("#next").onclick=next;
+ if(after>before)setTimeout(()=>evolutionPopup(after),120);
+}
+
+// Keep speech scoring accuracy-based; use the new time score only as a small component.
+function finishSpeech(){
+ let raw=S.speechScore, sb=speedBonus(), before=stage(S.score);
+ let gain=Math.round(raw*0.6)+(raw>=70?Math.round(sb.points*0.5):0);
+ S.score+=gain;if(raw>=70){S.correct++;S.combo++}else S.combo=0;
+ S.answers.push({q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,speechScore:raw,points:gain,speedBonus:raw>=70?Math.round(sb.points*0.5):0});
+ updateLiveSession();upsertRemoteScore(false);
+ let after=stage(S.score);
+ $(".card").insertAdjacentHTML("beforeend",`<div class="feedback ${raw>=70?"ok":"bad"}">발음 점수 ${raw}점 · +${gain}점</div><div class="actions"><button class="btn" id="next">NEXT →</button></div>`);
+ $("#next").onclick=next;
+ if(after>before)setTimeout(()=>evolutionPopup(after),120);
+}
