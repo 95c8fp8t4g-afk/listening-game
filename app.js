@@ -1351,3 +1351,145 @@ function pruneKickSelectionV29(){
  const existing=new Set([...document.querySelectorAll(".kick-player-v24")].map(x=>String(x.value)));
  [...S.kickSelectionV29].forEach(id=>{if(!existing.has(id))S.kickSelectionV29.delete(id)});
 }
+
+
+// ===== v30: long dialogue order questions with fixed context =====
+
+// Normalize old order questions so existing 4-line questions still work.
+function normalizeOrderQuestionV30(q){
+ if(q.type!=="order")return q;
+ if(!Array.isArray(q.fixed))q.fixed=[];
+ if(!Array.isArray(q.answer))q.answer=[];
+ if(!Array.isArray(q.items)||!q.items.length)q.items=shuffle([...q.answer]);
+ return q;
+}
+questions.forEach(normalizeOrderQuestionV30);
+
+// Override remote loader: order answer may now be either the old array
+// or {fixed:[...], order:[...]}.
+loadRemoteQuestions=async function(){
+ if(!supabaseClient)return;
+ const {data,error}=await supabaseClient.from("game_questions").select("*").order("question_no",{ascending:true});
+ if(error){console.error(error);return}
+ if(data?.length){
+   questions=data.map(r=>{
+     let fixed=[],answer="";
+     if(r.type==="order"){
+       if(Array.isArray(r.answer)){answer=r.answer;fixed=[]}
+       else if(r.answer && typeof r.answer==="object"){
+         fixed=Array.isArray(r.answer.fixed)?r.answer.fixed:[];
+         answer=Array.isArray(r.answer.order)?r.answer.order:[];
+       }else answer=[];
+     }else if(r.type==="choice"){
+       answer=r.answer?.value??r.answer??"";
+     }
+     return normalizeOrderQuestionV30({
+       type:r.type,round:r.round_name||"Question",title:r.title||"",target:r.target||"",
+       options:Array.isArray(r.options)?r.options:[],
+       fixed,
+       answer,
+       items:r.type==="order"?shuffle([...(answer||[])]):[],
+       enabled:r.enabled
+     });
+   });
+   localStorage.setItem("LQ_questions",JSON.stringify(questions));
+ }
+};
+
+// Override remote save without requiring any new Supabase columns.
+// fixed lines and sortable lines are stored together in the existing JSONB answer field.
+saveQuestionsRemote=async function(){
+ if(!supabaseClient)return;
+ const rows=questions.map((q,i)=>({
+   question_no:i+1,type:q.type,round_name:q.round||"Question",title:q.title||"",target:q.target||null,
+   options:q.type==="choice"?(q.options||[]):[],
+   answer:q.type==="order"
+     ? {fixed:Array.isArray(q.fixed)?q.fixed:[],order:Array.isArray(q.answer)?q.answer:[]}
+     : q.type==="choice"?{value:q.answer||""}:null,
+   enabled:!!q.enabled,updated_at:new Date().toISOString()
+ }));
+ const {error}=await supabaseClient.from("game_questions").upsert(rows,{onConflict:"question_no"});
+ if(error){console.error(error);alert("문제 저장 중 오류가 발생했습니다: "+error.message)}
+};
+
+// Student order screen: fixed dialogue stays visible at the top;
+// only the teacher-selected continuation lines are shuffled and movable.
+order=function(q){
+ q=normalizeOrderQuestionV30(q);
+ const fixedHTML=q.fixed.length?`
+   <div class="dialogue-context">
+     <div class="dialogue-context-label">📌 먼저 제시되는 대화</div>
+     ${q.fixed.map((x,i)=>`<div class="fixed-dialogue-line"><span>${i+1}</span><p>${esc(x)}</p></div>`).join("")}
+   </div>
+   <div class="order-guide">👇 이어질 대화의 순서를 맞춰 보세요.</div>`:"";
+
+ chrome(`<div class="round">${q.round}</div><div class="prompt">${esc(q.title)}</div>
+ ${fixedHTML}
+ <div class="sortable-dialogue">
+ ${S.order.map((x,i)=>`<div class="order"><span>${q.fixed.length+i+1}. ${esc(x)}</span><div><button class="icon" data-u="${i}">↑</button> <button class="icon" data-d="${i}">↓</button></div></div>`).join("")}
+ </div>
+ <div class="actions"><button class="btn" id="check">CHECK</button></div>`);
+
+ document.querySelectorAll("[data-u]").forEach(b=>b.onclick=()=>mv(+b.dataset.u,-1,q));
+ document.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>mv(+b.dataset.d,1,q));
+ $("#check").onclick=()=>finish(JSON.stringify(S.order)===JSON.stringify(q.answer),[...q.fixed,...S.order].join(" | "));
+};
+
+// Teacher editor override. Other question types are unchanged.
+editor=function(){
+ questions.forEach(normalizeOrderQuestionV30);
+ $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2>
+ <p class="sub">최대 15문항까지 만들 수 있습니다. 대화 순서 문제는 긴 대화의 앞부분을 먼저 보여주고, 뒷부분 몇 문장만 순서 맞추기로 만들 수 있습니다.</p>
+ ${questions.map((q,i)=>`<div class="editor">
+ <div style="display:flex;justify-content:space-between;align-items:center"><b>Q${i+1}</b><label style="margin:0"><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label></div>
+ <div class="row"><div><label>유형</label><select data-type="${i}">
+ <option value="order" ${q.type==="order"?"selected":""}>대화 순서</option>
+ <option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option>
+ <option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option></select></div>
+ <div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div></div>
+ ${q.type==="order"?`
+   <div class="order-editor-v30">
+     <label>① 학생에게 먼저 보여줄 대화 <small>(순서 고정 · 한 줄에 한 문장)</small></label>
+     <textarea data-fixed-lines="${i}" placeholder="예) A: What are you doing this weekend?&#10;B: I'm not sure yet.">${esc((q.fixed||[]).join("\n"))}</textarea>
+     <label>② 학생이 순서를 맞출 대화 <small>(한 줄에 한 문장 · 입력 순서가 정답)</small></label>
+     <textarea data-lines="${i}" placeholder="예) A: How about going to the movies?&#10;B: That sounds great!&#10;A: What time should we meet?&#10;B: How about 3 p.m.?">${esc((q.answer||[]).join("\n"))}</textarea>
+     <p class="order-editor-help">예: 전체 8문장 대화라면 ①에 3~4문장, ②에 나머지 4~5문장을 넣을 수 있습니다. ①은 그대로 제시되고 ②만 섞여서 출제됩니다.</p>
+   </div>`:""}
+ ${q.type==="choice"?`<label>선택지 (한 줄에 하나)</label><textarea data-options="${i}">${esc(q.options.join("\n"))}</textarea><label>정답</label><input data-answer="${i}" value="${esc(q.answer)}">`:""}
+ ${q.type==="speak"?`<label>학생이 읽을 목표 문장</label><input data-target="${i}" value="${esc(q.target)}">`:""}
+ </div>`).join("")}
+ <div class="actions"><button class="btn secondary" id="reset">기본 문제 복원</button><button class="btn" id="saveQ">변경사항 저장</button></div>
+ <p class="note">대화 순서 문제는 ①의 문장은 고정해서 보여주고, ②에 입력한 문장만 무작위로 섞습니다. 6~8문장 이상의 대화도 사용할 수 있습니다.</p></div>`;
+
+ document.querySelectorAll("[data-type]").forEach(s=>s.onchange=()=>{
+   questions[+s.dataset.type].type=s.value;
+   normalizeOrderQuestionV30(questions[+s.dataset.type]);
+   localStorage.setItem("LQ_questions",JSON.stringify(questions));
+   editor();
+ });
+
+ $("#saveQ").onclick=async()=>{
+   questions.forEach((q,i)=>{
+     q.title=document.querySelector(`[data-title="${i}"]`).value.trim();
+     q.enabled=document.querySelector(`[data-enabled="${i}"]`).checked && !!q.title;
+     if(q.type==="order"){
+       q.fixed=document.querySelector(`[data-fixed-lines="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);
+       q.answer=document.querySelector(`[data-lines="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);
+       q.items=shuffle([...q.answer]);
+     }
+     if(q.type==="choice"){
+       q.options=document.querySelector(`[data-options="${i}"]`).value.split("\n").map(x=>x.trim()).filter(Boolean);
+       q.answer=document.querySelector(`[data-answer="${i}"]`).value.trim();
+     }
+     if(q.type==="speak")q.target=document.querySelector(`[data-target="${i}"]`).value.trim();
+   });
+   localStorage.setItem("LQ_questions",JSON.stringify(questions));
+   await saveQuestionsRemote();
+   alert("저장되었습니다. 학생 게임에 바로 반영됩니다.");
+ };
+
+ $("#reset").onclick=()=>{if(confirm("기본 문제로 되돌릴까요?")){
+   questions=JSON.parse(JSON.stringify(DEFAULT)).map(normalizeOrderQuestionV30);
+   localStorage.setItem("LQ_questions",JSON.stringify(questions));editor();
+ }};
+};

@@ -120,3 +120,18 @@ table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px s
 
 /* v29: visual feedback only; no additional kick sector */
 .kick-row.selected{background:#eef4ff!important;border-color:#173b7a!important;box-shadow:0 0 0 1px #173b7a inset}
+
+/* v30 long dialogue order */
+.dialogue-context{margin:14px 0 18px;padding:14px;border-radius:16px;background:#f4f7fb;border:1px solid #dbe4f0}
+.dialogue-context-label{font-size:12px;font-weight:900;color:#496078;margin-bottom:9px}
+.fixed-dialogue-line{display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:start;padding:8px 4px;border-bottom:1px solid #e1e8f0}
+.fixed-dialogue-line:last-child{border-bottom:0}
+.fixed-dialogue-line span{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:#dce7f5;font-size:11px;font-weight:900}
+.fixed-dialogue-line p{margin:2px 0;line-height:1.45;font-weight:700}
+.order-guide{margin:8px 0 10px;font-size:13px;font-weight:900;color:#173b7a}
+.sortable-dialogue .order{margin-bottom:8px}
+.order-editor-v30{margin-top:10px;padding:13px;border:1px solid var(--line);border-radius:14px;background:#fafcff}
+.order-editor-v30 label{margin-top:10px}
+.order-editor-v30 label:first-child{margin-top:0}
+.order-editor-v30 small{font-weight:500;color:var(--muted)}
+.order-editor-help{margin:8px 0 0;font-size:12px;line-height:1.5;color:var(--muted)}
