@@ -1511,108 +1511,116 @@ $('#reset').onclick=()=>{if(confirm('기본 문제로 되돌릴까요?')){questi
 
 
 
-// ===== v33: repaired problem editor; single Save All button =====
-function readQuestionCardV33(i, forcedType=null){
- const current=ensureQuestionShapeV31(questions[i]);
- const q=cloneQuestionV31(current);
+
+// ===== v34: working problem editor, single save button =====
+function q34ReadVisibleCard(i){
+ let q=q31shape(questions[i]);
  const title=document.querySelector(`[data-title="${i}"]`);
  const enabled=document.querySelector(`[data-enabled="${i}"]`);
- const typeEl=document.querySelector(`[data-type="${i}"]`);
- const domType=forcedType || typeEl?.value || q.type;
-
+ const type=document.querySelector(`[data-type="${i}"]`);
  if(title)q.title=title.value.trim();
  if(enabled)q.enabled=enabled.checked;
 
- // Read the fields that ACTUALLY exist in the DOM before changing type.
- const fixed=document.querySelector(`[data-fixed-lines="${i}"]`);
- const lines=document.querySelector(`[data-lines="${i}"]`);
- const options=document.querySelector(`[data-options="${i}"]`);
- const answer=document.querySelector(`[data-answer="${i}"]`);
- const target=document.querySelector(`[data-target="${i}"]`);
- if(fixed||lines){
-   q.fixed=(fixed?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
-   q.answer=(lines?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
-   q.items=shuffle([...(q.answer||[])]);
- }
- if(options||answer){
-   q.options=(options?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
-   q.answer=(answer?.value||"").trim();
- }
- if(target)q.target=target.value.trim();
-
- q.type=domType;
- // Initialize only fields needed by the newly selected type.
- if(domType==="order"){
-   if(!Array.isArray(q.fixed))q.fixed=[];
-   if(!Array.isArray(q.answer))q.answer=[];
+ // Read only the currently visible form.
+ if(q.type==="order"){
+   q.fixed=(document.querySelector(`[data-fixed-lines="${i}"]`)?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+   q.answer=(document.querySelector(`[data-lines="${i}"]`)?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
    q.items=[...q.answer];
- }else if(domType==="choice"){
-   if(!Array.isArray(q.options))q.options=[];
-   if(typeof q.answer!=="string")q.answer="";
- }else if(domType==="speak"){
-   q.target=typeof q.target==="string"?q.target:"";
+ }else if(q.type==="choice"){
+   q.options=(document.querySelector(`[data-options="${i}"]`)?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+   q.answer=(document.querySelector(`[data-answer="${i}"]`)?.value||"").trim();
+ }else if(q.type==="speak"){
+   q.target=(document.querySelector(`[data-target="${i}"]`)?.value||"").trim();
  }
+ if(type)q.type=type.value;
  return q;
 }
 
-editor=function(){
- questions=questions.map(ensureQuestionShapeV31);
- $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2>
- <p class="sub">문제를 수정한 뒤 맨 아래의 전체 문제 저장 버튼을 누르면 현재 상태 그대로 저장됩니다.</p>
- ${questions.map((q,i)=>`<div class="editor question-editor-v31" data-question-card="${i}">
-   <div class="question-editor-head"><b>Q${i+1}</b>
-     <label><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label>
-   </div>
-   <div class="row">
-     <div><label>유형</label><select data-type="${i}">
-       <option value="order" ${q.type==="order"?"selected":""}>대화 순서</option>
-       <option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option>
-       <option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option>
-     </select></div>
-     <div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div>
-   </div>
-   <div id="questionFields${i}">${questionFieldsV31(q,i)}</div>
- </div>`).join("")}
- <div class="actions">
-   <button class="btn secondary" id="resetV33">기본 문제 복원</button>
-   <button class="btn" id="saveAllV33">💾 전체 문제 저장</button>
- </div></div>`;
+function q34SwitchType(i,newType){
+ // Save the old visible form into this question only.
+ let q=q34ReadVisibleCard(i);
+ q.type=newType;
 
- document.querySelectorAll("[data-type]").forEach(sel=>{
-   sel.onchange=()=>{
-     const i=Number(sel.dataset.type);
-     // Snapshot the old form first, then switch only this question.
-     const q=readQuestionCardV33(i,sel.value);
-     questions[i]=q;
-     const fields=document.querySelector(`#questionFields${i}`);
-     if(fields)fields.innerHTML=questionFieldsV31(q,i);
-   };
+ // Initialize fields for the newly selected type without touching other questions.
+ if(newType==="order"){
+   q.fixed=Array.isArray(q.fixed)?q.fixed:[];
+   q.answer=Array.isArray(q.answer)?q.answer:[];
+   q.items=[...q.answer];
+ }else if(newType==="choice"){
+   q.options=Array.isArray(q.options)?q.options:[];
+   q.answer=typeof q.answer==="string"?q.answer:"";
+ }else{
+   q.target=typeof q.target==="string"?q.target:"";
+ }
+ questions[i]=q;
+ const holder=document.querySelector(`#q34fields${i}`);
+ if(holder)holder.innerHTML=q31fields(q,i);
+}
+
+editor=function(){
+ questions=questions.map(q31shape);
+ const panel=$("#panel");
+ if(!panel)return;
+ panel.innerHTML=`<div class="card">
+   <span class="badge">TEACHER EDITOR</span>
+   <h2>게임 문제 편집</h2>
+   <p class="sub">문제를 모두 수정한 뒤 맨 아래의 전체 문제 저장 버튼을 한 번 누르면 현재 상태 그대로 저장됩니다.</p>
+   ${questions.map((q,i)=>`<div class="editor" data-q34-card="${i}">
+     <div class="q31head">
+       <b>Q${i+1}</b>
+       <label><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label>
+     </div>
+     <div class="row">
+       <div>
+         <label>유형</label>
+         <select data-q34-type="${i}" data-type="${i}">
+           <option value="order" ${q.type==="order"?"selected":""}>대화 순서</option>
+           <option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option>
+           <option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option>
+         </select>
+       </div>
+       <div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div>
+     </div>
+     <div id="q34fields${i}">${q31fields(q,i)}</div>
+   </div>`).join("")}
+   <div class="actions">
+     <button class="btn secondary" id="q34reset">기본 문제 복원</button>
+     <button class="btn" id="q34save">💾 전체 문제 저장</button>
+   </div>
+ </div>`;
+
+ document.querySelectorAll("[data-q34-type]").forEach(sel=>{
+   sel.onchange=()=>q34SwitchType(Number(sel.dataset.q34Type),sel.value);
  });
 
- $("#saveAllV33").onclick=async()=>{
-   // Snapshot every card independently. No card can overwrite another.
-   const draft=questions.map((_,i)=>readQuestionCardV33(i));
-   const btn=$("#saveAllV33");
+ $("#q34save").onclick=async()=>{
+   // First capture every card while each card still owns its own DOM fields.
+   const draft=questions.map((q,i)=>{
+     // q34ReadVisibleCard expects questions[i].type to be the visible form type,
+     // which q34SwitchType keeps synchronized.
+     return q34ReadVisibleCard(i);
+   });
+   const btn=$("#q34save");
    btn.disabled=true;btn.textContent="저장 중…";
    try{
      for(let i=0;i<draft.length;i++){
-       const result=await saveOneQuestionRemoteV31(i,draft[i]);
-       if(!result.ok)throw new Error(`Q${i+1}: ${result.message}`);
+       const r=await q31save(i,draft[i]);
+       if(!r.ok)throw new Error(`Q${i+1}: ${r.message}`);
      }
-     questions=draft.map(cloneQuestionV31);
+     questions=draft.map(q31clone);
      localStorage.setItem("LQ_questions",JSON.stringify(questions));
-     alert("현재 문제 설정이 그대로 저장되었습니다.");
+     alert("전체 문제가 저장되었습니다.");
    }catch(err){
-     console.error(err);
-     alert("문제 저장 실패: "+(err?.message||err));
+     console.error("QUESTION SAVE ERROR",err);
+     alert("저장 실패: "+(err?.message||String(err)));
    }finally{
      btn.disabled=false;btn.textContent="💾 전체 문제 저장";
    }
  };
 
- $("#resetV33").onclick=()=>{
+ $("#q34reset").onclick=()=>{
    if(!confirm("기본 문제로 되돌릴까요?"))return;
-   questions=JSON.parse(JSON.stringify(DEFAULT)).map(ensureQuestionShapeV31);
+   questions=JSON.parse(JSON.stringify(DEFAULT)).map(q31shape);
    localStorage.setItem("LQ_questions",JSON.stringify(questions));
    editor();
  };
