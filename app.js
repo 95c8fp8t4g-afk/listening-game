@@ -1510,52 +1510,110 @@ $('#reset').onclick=()=>{if(confirm('기본 문제로 되돌릴까요?')){questi
 };
 
 
-// ===== v32: simple editor — one save button only =====
+
+// ===== v33: repaired problem editor; single Save All button =====
+function readQuestionCardV33(i, forcedType=null){
+ const current=ensureQuestionShapeV31(questions[i]);
+ const q=cloneQuestionV31(current);
+ const title=document.querySelector(`[data-title="${i}"]`);
+ const enabled=document.querySelector(`[data-enabled="${i}"]`);
+ const typeEl=document.querySelector(`[data-type="${i}"]`);
+ const domType=forcedType || typeEl?.value || q.type;
+
+ if(title)q.title=title.value.trim();
+ if(enabled)q.enabled=enabled.checked;
+
+ // Read the fields that ACTUALLY exist in the DOM before changing type.
+ const fixed=document.querySelector(`[data-fixed-lines="${i}"]`);
+ const lines=document.querySelector(`[data-lines="${i}"]`);
+ const options=document.querySelector(`[data-options="${i}"]`);
+ const answer=document.querySelector(`[data-answer="${i}"]`);
+ const target=document.querySelector(`[data-target="${i}"]`);
+ if(fixed||lines){
+   q.fixed=(fixed?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+   q.answer=(lines?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+   q.items=shuffle([...(q.answer||[])]);
+ }
+ if(options||answer){
+   q.options=(options?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+   q.answer=(answer?.value||"").trim();
+ }
+ if(target)q.target=target.value.trim();
+
+ q.type=domType;
+ // Initialize only fields needed by the newly selected type.
+ if(domType==="order"){
+   if(!Array.isArray(q.fixed))q.fixed=[];
+   if(!Array.isArray(q.answer))q.answer=[];
+   q.items=[...q.answer];
+ }else if(domType==="choice"){
+   if(!Array.isArray(q.options))q.options=[];
+   if(typeof q.answer!=="string")q.answer="";
+ }else if(domType==="speak"){
+   q.target=typeof q.target==="string"?q.target:"";
+ }
+ return q;
+}
+
 editor=function(){
  questions=questions.map(ensureQuestionShapeV31);
  $("#panel").innerHTML=`<div class="card"><span class="badge">TEACHER EDITOR</span><h2>게임 문제 편집</h2>
- <p class="sub">문제를 자유롭게 수정한 뒤 맨 아래의 전체 문제 저장 버튼을 한 번만 누르면 현재 화면 상태 그대로 저장됩니다.</p>
+ <p class="sub">문제를 수정한 뒤 맨 아래의 전체 문제 저장 버튼을 누르면 현재 상태 그대로 저장됩니다.</p>
  ${questions.map((q,i)=>`<div class="editor question-editor-v31" data-question-card="${i}">
    <div class="question-editor-head"><b>Q${i+1}</b>
-   <label><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label></div>
-   <div class="row"><div><label>유형</label><select data-type="${i}">
-    <option value="order" ${q.type==="order"?"selected":""}>대화 순서</option>
-    <option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option>
-    <option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option>
-   </select></div><div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div></div>
+     <label><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label>
+   </div>
+   <div class="row">
+     <div><label>유형</label><select data-type="${i}">
+       <option value="order" ${q.type==="order"?"selected":""}>대화 순서</option>
+       <option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option>
+       <option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option>
+     </select></div>
+     <div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div>
+   </div>
    <div id="questionFields${i}">${questionFieldsV31(q,i)}</div>
  </div>`).join("")}
- <div class="actions"><button class="btn secondary" id="reset">기본 문제 복원</button><button class="btn" id="saveAllV32">💾 전체 문제 저장</button></div>
- <p class="note">유형을 바꾸면 해당 문제의 입력 폼만 바뀝니다. 저장 버튼을 누르기 전까지 다른 문제에는 영향을 주지 않습니다.</p></div>`;
+ <div class="actions">
+   <button class="btn secondary" id="resetV33">기본 문제 복원</button>
+   <button class="btn" id="saveAllV33">💾 전체 문제 저장</button>
+ </div></div>`;
 
- // Switch only this question's form. Do not rerender the full editor.
- document.querySelectorAll("[data-type]").forEach(sel=>sel.onchange=()=>{
-   const i=+sel.dataset.type;
-   const q=collectQuestionV31(i);
-   q.type=sel.value;
-   questions[i]=ensureQuestionShapeV31(q);
-   document.querySelector(`#questionFields${i}`).innerHTML=questionFieldsV31(questions[i],i);
+ document.querySelectorAll("[data-type]").forEach(sel=>{
+   sel.onchange=()=>{
+     const i=Number(sel.dataset.type);
+     // Snapshot the old form first, then switch only this question.
+     const q=readQuestionCardV33(i,sel.value);
+     questions[i]=q;
+     const fields=document.querySelector(`#questionFields${i}`);
+     if(fields)fields.innerHTML=questionFieldsV31(q,i);
+   };
  });
 
- $("#saveAllV32").onclick=async()=>{
-   const draft=questions.map((_,i)=>collectQuestionV31(i));
-   const button=$("#saveAllV32");
-   button.disabled=true;button.textContent="저장 중…";
-   for(let i=0;i<draft.length;i++){
-     const result=await saveOneQuestionRemoteV31(i,draft[i]);
-     if(!result.ok){
-       button.disabled=false;button.textContent="💾 전체 문제 저장";
-       return alert(`Q${i+1} 저장 실패: ${result.message}`);
+ $("#saveAllV33").onclick=async()=>{
+   // Snapshot every card independently. No card can overwrite another.
+   const draft=questions.map((_,i)=>readQuestionCardV33(i));
+   const btn=$("#saveAllV33");
+   btn.disabled=true;btn.textContent="저장 중…";
+   try{
+     for(let i=0;i<draft.length;i++){
+       const result=await saveOneQuestionRemoteV31(i,draft[i]);
+       if(!result.ok)throw new Error(`Q${i+1}: ${result.message}`);
      }
+     questions=draft.map(cloneQuestionV31);
+     localStorage.setItem("LQ_questions",JSON.stringify(questions));
+     alert("현재 문제 설정이 그대로 저장되었습니다.");
+   }catch(err){
+     console.error(err);
+     alert("문제 저장 실패: "+(err?.message||err));
+   }finally{
+     btn.disabled=false;btn.textContent="💾 전체 문제 저장";
    }
-   questions=draft.map(cloneQuestionV31);
-   localStorage.setItem("LQ_questions",JSON.stringify(questions));
-   button.disabled=false;button.textContent="💾 전체 문제 저장";
-   alert("현재 문제 설정이 그대로 저장되었습니다.");
  };
 
- $("#reset").onclick=()=>{if(confirm("기본 문제로 되돌릴까요?")){
+ $("#resetV33").onclick=()=>{
+   if(!confirm("기본 문제로 되돌릴까요?"))return;
    questions=JSON.parse(JSON.stringify(DEFAULT)).map(ensureQuestionShapeV31);
-   localStorage.setItem("LQ_questions",JSON.stringify(questions));editor();
- }};
+   localStorage.setItem("LQ_questions",JSON.stringify(questions));
+   editor();
+ };
 };
