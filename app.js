@@ -2353,3 +2353,203 @@ function finishSpeech(){
 }
 function previewSpeechScoreV40(q){speak(q);}
 function showSpeechResultV41(q){speak(q);}
+
+
+// ===== v43: Supabase is the single source of truth for questions =====
+
+async function loadQuestionsAuthoritativeV43(){
+ if(!supabaseClient)return questions;
+ const {data,error}=await supabaseClient
+   .from("game_questions")
+   .select("*")
+   .order("question_no",{ascending:true});
+ if(error){
+   console.error("QUESTION LOAD ERROR",error);
+   throw error;
+ }
+ if(!data?.length)return questions;
+
+ questions=data.map(r=>{
+   if(r.type==="order"){
+     const d=extractOrderV39(r);
+     return {
+       type:"order",round:r.round_name||"Question",title:r.title||"",
+       fixed:d.fixed,answer:d.order,items:shuffle([...d.order]),
+       options:[...d.order],target:"",enabled:!!r.enabled
+     };
+   }
+   if(r.type==="choice"){
+     return {
+       type:"choice",round:r.round_name||"Question",title:r.title||"",
+       options:Array.isArray(r.options)?r.options:[],
+       answer:(r.answer&&typeof r.answer==="object")?(r.answer.value||""):(r.answer||""),
+       fixed:[],target:"",enabled:!!r.enabled
+     };
+   }
+   return {
+     type:"speak",round:r.round_name||"Question",title:r.title||"",
+     target:r.target||"",options:[],answer:"",fixed:[],enabled:!!r.enabled
+   };
+ });
+ localStorage.setItem("LQ_questions",JSON.stringify(questions));
+ return questions;
+}
+
+loadRemoteQuestions=loadQuestionsAuthoritativeV43;
+
+async function saveAllQuestionsV43(draft){
+ const rows=draft.map((q,i)=>{
+   const sortable=q.type==="order"
+     ? (Array.isArray(q.answer)?q.answer.map(v=>String(v).trim()).filter(Boolean):[])
+     : [];
+   return {
+     question_no:i+1,
+     type:q.type,
+     round_name:q.round||"Question",
+     title:q.title||"",
+     target:q.type==="speak"?(q.target||null):null,
+     options:q.type==="order" ? sortable : q.type==="choice"?(q.options||[]):[],
+     answer:q.type==="order"
+       ? {fixed:Array.isArray(q.fixed)?q.fixed.map(v=>String(v).trim()).filter(Boolean):[],order:sortable}
+       : q.type==="choice"?{value:q.answer||""}:null,
+     enabled:!!q.enabled,
+     updated_at:new Date().toISOString()
+   };
+ });
+
+ const {error}=await supabaseClient.from("game_questions")
+   .upsert(rows,{onConflict:"question_no"});
+ if(error)throw error;
+
+ const {data,error:verifyError}=await supabaseClient
+   .from("game_questions")
+   .select("*")
+   .order("question_no",{ascending:true});
+ if(verifyError)throw verifyError;
+
+ for(let i=0;i<draft.length;i++){
+   const saved=(data||[]).find(r=>Number(r.question_no)===i+1);
+   if(!saved)throw new Error(`Q${i+1} 저장 확인 실패`);
+   if(draft[i].type==="order"){
+     const d=extractOrderV39(saved);
+     const expected=Array.isArray(draft[i].answer)?draft[i].answer.map(v=>String(v).trim()).filter(Boolean):[];
+     if(JSON.stringify(d.order)!==JSON.stringify(expected)){
+       throw new Error(`Q${i+1} 대화 순서 문장 저장 확인 실패`);
+     }
+   }
+ }
+ return true;
+}
+
+editor=async function(){
+ const panel=$("#panel");
+ if(!panel)return;
+ panel.innerHTML=`<div class="card"><p class="sub">저장된 문제를 불러오는 중…</p></div>`;
+
+ try{
+   await loadQuestionsAuthoritativeV43();
+ }catch(err){
+   panel.innerHTML=`<div class="card"><div class="feedback bad">문제를 불러오지 못했습니다.<br>${esc(err?.message||String(err))}</div></div>`;
+   return;
+ }
+
+ questions=questions.map(q31shape);
+
+ panel.innerHTML=`<div class="card">
+   <span class="badge">TEACHER EDITOR</span>
+   <h2>게임 문제 편집</h2>
+   <p class="sub">이 화면은 Supabase에 저장된 최신 문제입니다. 컴퓨터나 브라우저를 껐다 켜도 같은 문제가 다시 불러와집니다.</p>
+   ${questions.map((q,i)=>`<div class="editor" data-v43-card="${i}">
+     <div class="q31head">
+       <b>Q${i+1}</b>
+       <label><input style="width:auto" type="checkbox" data-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label>
+     </div>
+     <div class="row">
+       <div><label>유형</label><select data-v43-type="${i}" data-type="${i}">
+         <option value="order" ${q.type==="order"?"selected":""}>대화 순서</option>
+         <option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option>
+         <option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option>
+       </select></div>
+       <div><label>문제 지시문</label><input data-title="${i}" value="${esc(q.title)}"></div>
+     </div>
+     <div id="v43fields${i}">${q31fields(q,i)}</div>
+   </div>`).join("")}
+   <div class="actions">
+     <button class="btn secondary" id="v43Reload">↻ 저장된 문제 다시 불러오기</button>
+     <button class="btn" id="v43Save">💾 전체 문제 저장</button>
+   </div>
+ </div>`;
+
+ function readCard(i){
+   let q=q31shape(questions[i]);
+   q.title=(document.querySelector(`[data-title="${i}"]`)?.value||"").trim();
+   q.enabled=!!document.querySelector(`[data-enabled="${i}"]`)?.checked;
+
+   if(q.type==="order"){
+     q.fixed=(document.querySelector(`[data-fixed-lines="${i}"]`)?.value||"")
+       .split("\n").map(x=>x.trim()).filter(Boolean);
+     q.answer=(document.querySelector(`[data-lines="${i}"]`)?.value||"")
+       .split("\n").map(x=>x.trim()).filter(Boolean);
+     q.items=[...q.answer];
+   }else if(q.type==="choice"){
+     q.options=(document.querySelector(`[data-options="${i}"]`)?.value||"")
+       .split("\n").map(x=>x.trim()).filter(Boolean);
+     q.answer=(document.querySelector(`[data-answer="${i}"]`)?.value||"").trim();
+   }else{
+     q.target=(document.querySelector(`[data-target="${i}"]`)?.value||"").trim();
+   }
+   return q;
+ }
+
+ document.querySelectorAll("[data-v43-type]").forEach(sel=>{
+   sel.onchange=()=>{
+     const i=Number(sel.dataset.v43Type);
+     let q=readCard(i);
+     q.type=sel.value;
+     if(q.type==="order"){
+       if(!Array.isArray(q.fixed))q.fixed=[];
+       if(!Array.isArray(q.answer))q.answer=[];
+       q.items=[...q.answer];
+     }else if(q.type==="choice"){
+       if(!Array.isArray(q.options))q.options=[];
+       if(typeof q.answer!=="string")q.answer="";
+     }else{
+       if(typeof q.target!=="string")q.target="";
+     }
+     questions[i]=q;
+     const holder=document.querySelector(`#v43fields${i}`);
+     if(holder)holder.innerHTML=q31fields(q,i);
+   };
+ });
+
+ $("#v43Save").onclick=async()=>{
+   const draft=questions.map((_,i)=>readCard(i));
+   const btn=$("#v43Save");
+   btn.disabled=true;btn.textContent="저장 중…";
+   try{
+     await saveAllQuestionsV43(draft);
+     await loadQuestionsAuthoritativeV43();
+     alert("Supabase에 전체 문제가 저장되었습니다. 브라우저를 껐다 켜도 그대로 유지됩니다.");
+     await editor();
+   }catch(err){
+     console.error("QUESTION SAVE ERROR",err);
+     alert("저장 실패: "+(err?.message||String(err)));
+   }finally{
+     if($("#v43Save")){
+       $("#v43Save").disabled=false;
+       $("#v43Save").textContent="💾 전체 문제 저장";
+     }
+   }
+ };
+
+ $("#v43Reload").onclick=async()=>{
+   if(!confirm("아직 저장하지 않은 현재 수정 내용은 버리고 Supabase에 저장된 문제를 다시 불러올까요?"))return;
+   await editor();
+ };
+};
+
+const _beginSharedGameV43 = beginSharedGame;
+beginSharedGame=async function(ses){
+ await loadQuestionsAuthoritativeV43();
+ return _beginSharedGameV43.apply(this,arguments);
+};
