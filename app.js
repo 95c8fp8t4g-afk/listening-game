@@ -1740,3 +1740,144 @@ function finishSpeech(){
  $("#next").onclick=next;
  if(after>before)setTimeout(()=>evolutionPopup(after),120);
 }
+
+
+// ===== v37: unify order-question save/load format =====
+function decodeOrderV37(raw){
+ if(Array.isArray(raw)) return {fixed:[],order:raw};
+ if(raw && typeof raw==="object"){
+   return {
+     fixed:Array.isArray(raw.fixed)?raw.fixed:[],
+     order:Array.isArray(raw.order)?raw.order:(Array.isArray(raw.answer)?raw.answer:[])
+   };
+ }
+ return {fixed:[],order:[]};
+}
+
+loadRemoteQuestions=async function(){
+ if(!supabaseClient)return;
+ const {data,error}=await supabaseClient.from("game_questions").select("*").order("question_no",{ascending:true});
+ if(error){console.error("QUESTION LOAD ERROR",error);return}
+ if(!data?.length)return;
+
+ questions=data.map(r=>{
+   if(r.type==="order"){
+     const d=decodeOrderV37(r.answer);
+     return {
+       type:"order",round:r.round_name||"Question",title:r.title||"",
+       fixed:d.fixed,answer:d.order,items:shuffle([...d.order]),
+       options:[],target:"",enabled:!!r.enabled
+     };
+   }
+   if(r.type==="choice"){
+     return {
+       type:"choice",round:r.round_name||"Question",title:r.title||"",
+       options:Array.isArray(r.options)?r.options:[],
+       answer:(r.answer && typeof r.answer==="object")?(r.answer.value||""):(r.answer||""),
+       fixed:[],target:"",enabled:!!r.enabled
+     };
+   }
+   return {
+     type:"speak",round:r.round_name||"Question",title:r.title||"",
+     target:r.target||"",options:[],answer:"",fixed:[],enabled:!!r.enabled
+   };
+ });
+ localStorage.setItem("LQ_questions",JSON.stringify(questions));
+};
+
+async function q31save(i,q){
+ if(!supabaseClient)return {ok:true};
+ const row={
+   question_no:i+1,
+   type:q.type,
+   round_name:q.round||"Question",
+   title:q.title||"",
+   target:q.type==="speak"?(q.target||null):null,
+   options:q.type==="choice"?(q.options||[]):[],
+   answer:q.type==="order"
+     ? {fixed:Array.isArray(q.fixed)?q.fixed:[],order:Array.isArray(q.answer)?q.answer:[]}
+     : q.type==="choice"?{value:q.answer||""}:null,
+   enabled:!!q.enabled,
+   updated_at:new Date().toISOString()
+ };
+ const {data,error}=await supabaseClient.from("game_questions")
+   .upsert(row,{onConflict:"question_no"}).select("question_no,type,answer").single();
+ if(error)return {ok:false,message:error.message};
+
+ // Verify that order lines really reached Supabase before reporting success.
+ if(q.type==="order"){
+   const d=decodeOrderV37(data?.answer);
+   if(d.order.length!==(q.answer||[]).length)
+     return {ok:false,message:"순서 맞추기 문장이 Supabase에 정상 저장되지 않았습니다."};
+ }
+ return {ok:true};
+}
+
+// Reload authoritative saved questions before every new student game.
+// This prevents stale localStorage data from producing an empty order question.
+const _startGameV37 = typeof startGame==="function" ? startGame : null;
+if(_startGameV37){
+ startGame=async function(){
+   await loadRemoteQuestions();
+   return _startGameV37.apply(this,arguments);
+ };
+}
+
+
+// ===== v38: refresh questions at the ACTUAL game-start moment =====
+// Students may sit in the lobby for several minutes.
+// Never use the question snapshot captured when they entered the lobby.
+beginSharedGame=async function(ses){
+ clearInterval(S.lobbyPoll);S.lobbyPoll=null;
+
+ // 1) Pull the teacher's latest saved questions from Supabase NOW.
+ await loadRemoteQuestions();
+
+ // 2) Rebuild this student's play list from the fresh data.
+ const fresh=activeQuestions().map(q=>{
+   if(q.type==="order"){
+     const d=decodeOrderV37(q.answer);
+     // loadRemoteQuestions already decodes it, but this also handles any legacy object safely.
+     const orderLines=Array.isArray(q.answer)?q.answer:d.order;
+     return {
+       ...q,
+       fixed:Array.isArray(q.fixed)?q.fixed:d.fixed,
+       answer:Array.isArray(orderLines)?orderLines:[],
+       items:shuffle([...(Array.isArray(orderLines)?orderLines:[])])
+     };
+   }
+   return {...q};
+ });
+
+ if(!fresh.length){
+   alert("선생님이 아직 출제할 문제를 저장하지 않았습니다.");
+   return home();
+ }
+
+ // Do not start a game containing an enabled order question with no sortable lines.
+ const broken=fresh.findIndex(q=>q.type==="order" && (!Array.isArray(q.answer)||q.answer.length===0));
+ if(broken>=0){
+   alert(`Q${broken+1} 순서 맞추기 문장이 비어 있습니다. 선생님에게 알려 주세요.`);
+   return home();
+ }
+
+ S.playQuestions=fresh;
+ S.q=0;
+ S.sessionId=ses.id;
+ S.sessionEndsAt=new Date(ses.ends_at).getTime();
+ S.sessionDurationMinutes=Number(ses.duration_minutes)||null;
+ S.gameStartedAt=ses.started_at?new Date(ses.started_at).getTime():Date.now();
+ S.timeExpired=false;
+ S.activityStatus="main_game";
+
+ await upsertRemoteScore(false);
+ subscribeSession();
+ question();
+};
+
+// Also refresh immediately before a late student joins an already-playing session.
+const _homeV38=home;
+home=async function(){
+ await loadRemoteQuestions();
+ return _homeV38.apply(this,arguments);
+};
