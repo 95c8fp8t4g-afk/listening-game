@@ -1881,3 +1881,167 @@ home=async function(){
  await loadRemoteQuestions();
  return _homeV38.apply(this,arguments);
 };
+
+
+// ===== v39: robust order-question storage + no whole-game blocking =====
+
+// Accept every format used by previous versions.
+// For order questions, `options` is also used as a redundant backup of sortable lines.
+function extractOrderV39(rowOrQuestion){
+ const x=rowOrQuestion||{};
+ const raw=x.answer;
+ let fixed=[],order=[];
+
+ if(Array.isArray(raw)){
+   order=raw;
+ }else if(raw && typeof raw==="object"){
+   if(Array.isArray(raw.fixed))fixed=raw.fixed;
+   if(Array.isArray(raw.order))order=raw.order;
+   else if(Array.isArray(raw.answer))order=raw.answer;
+   else if(Array.isArray(raw.items))order=raw.items;
+   else if(Array.isArray(raw.lines))order=raw.lines;
+ }
+
+ if(!fixed.length && Array.isArray(x.fixed))fixed=x.fixed;
+ if(!order.length && Array.isArray(x.items))order=x.items;
+
+ // v39 redundant Supabase backup
+ if(!order.length && Array.isArray(x.options))order=x.options;
+
+ return {
+   fixed:fixed.map(v=>String(v).trim()).filter(Boolean),
+   order:order.map(v=>String(v).trim()).filter(Boolean)
+ };
+}
+
+loadRemoteQuestions=async function(){
+ if(!supabaseClient)return;
+ const {data,error}=await supabaseClient.from("game_questions").select("*").order("question_no",{ascending:true});
+ if(error){console.error("QUESTION LOAD ERROR",error);return}
+ if(!data?.length)return;
+
+ questions=data.map(r=>{
+   if(r.type==="order"){
+     const d=extractOrderV39(r);
+     return {
+       type:"order",round:r.round_name||"Question",title:r.title||"",
+       fixed:d.fixed,answer:d.order,items:shuffle([...d.order]),
+       // retain the backup too
+       options:[...d.order],target:"",enabled:!!r.enabled
+     };
+   }
+   if(r.type==="choice"){
+     return {
+       type:"choice",round:r.round_name||"Question",title:r.title||"",
+       options:Array.isArray(r.options)?r.options:[],
+       answer:(r.answer && typeof r.answer==="object")?(r.answer.value||""):(r.answer||""),
+       fixed:[],target:"",enabled:!!r.enabled
+     };
+   }
+   return {
+     type:"speak",round:r.round_name||"Question",title:r.title||"",
+     target:r.target||"",options:[],answer:"",fixed:[],enabled:!!r.enabled
+   };
+ });
+ localStorage.setItem("LQ_questions",JSON.stringify(questions));
+};
+
+// Save sortable order lines redundantly into both answer JSON and options.
+// This uses existing DB columns; no SQL change is needed.
+async function q31save(i,q){
+ if(!supabaseClient)return {ok:true};
+ const sortable=q.type==="order"
+   ? (Array.isArray(q.answer)?q.answer.map(v=>String(v).trim()).filter(Boolean):[])
+   : [];
+ const row={
+   question_no:i+1,
+   type:q.type,
+   round_name:q.round||"Question",
+   title:q.title||"",
+   target:q.type==="speak"?(q.target||null):null,
+   options:q.type==="order" ? sortable : q.type==="choice"?(q.options||[]):[],
+   answer:q.type==="order"
+     ? {fixed:Array.isArray(q.fixed)?q.fixed.map(v=>String(v).trim()).filter(Boolean):[],order:sortable}
+     : q.type==="choice"?{value:q.answer||""}:null,
+   enabled:!!q.enabled,
+   updated_at:new Date().toISOString()
+ };
+ const {data,error}=await supabaseClient.from("game_questions")
+   .upsert(row,{onConflict:"question_no"})
+   .select("question_no,type,answer,options").single();
+ if(error)return {ok:false,message:error.message};
+
+ if(q.type==="order"){
+   const check=extractOrderV39(data);
+   if(!check.order.length && sortable.length)
+     return {ok:false,message:"순서 맞추기 문장을 서버에서 다시 확인하지 못했습니다."};
+ }
+ return {ok:true};
+}
+
+// At actual game start, rebuild from the newest server rows.
+// A single malformed question must NEVER block the whole class game.
+beginSharedGame=async function(ses){
+ clearInterval(S.lobbyPoll);S.lobbyPoll=null;
+ await loadRemoteQuestions();
+
+ const fresh=activeQuestions().map(q=>{
+   if(q.type!=="order")return {...q};
+   const d=extractOrderV39(q);
+   return {...q,fixed:d.fixed,answer:d.order,items:shuffle([...d.order])};
+ });
+
+ const playable=fresh.filter(q=>{
+   if(q.type!=="order")return true;
+   return Array.isArray(q.answer)&&q.answer.length>0;
+ });
+
+ const removed=fresh.length-playable.length;
+ if(!playable.length){
+   alert("출제 가능한 문제가 없습니다. 선생님에게 알려 주세요.");
+   return home();
+ }
+ if(removed>0){
+   console.warn(`${removed}개의 비정상 순서 문제를 자동 제외했습니다.`);
+ }
+
+ S.playQuestions=playable;
+ S.q=0;S.score=0;S.combo=0;S.correct=0;S.answers=[];
+ S.sessionId=ses.id;
+ S.sessionEndsAt=new Date(ses.ends_at).getTime();
+ S.sessionDurationMinutes=Number(ses.duration_minutes)||null;
+ S.gameStartedAt=ses.started_at?new Date(ses.started_at).getTime():Date.now();
+ S.timeExpired=false;S.activityStatus="main_game";
+
+ await upsertRemoteScore(false);
+ subscribeSession();
+ question();
+};
+
+// Final student-side order renderer also uses every available backup.
+function prepareOrderV39(q){
+ const d=extractOrderV39(q);
+ q={...q,fixed:d.fixed,answer:d.order};
+ q.items=shuffle([...d.order]);
+ return q;
+}
+
+question=function(){
+ if(S.timeExpired||remainingMs()<=0){S.timeExpired=true;return waitForRankingScreen();}
+ S.activityStatus="main_game";S.currentQuestion=S.q+1;S.miniStreak=0;upsertRemoteScore(false);
+ S.selected=null;S.transcript="";S.speechScore=null;S.questionStartedAt=Date.now();
+ let q=S.playQuestions[S.q];
+
+ if(q.type==="order"){
+   q=prepareOrderV39(q);
+   S.playQuestions[S.q]=q;
+   // If corruption somehow occurs after start, skip only this question with 0 points.
+   if(!q.answer.length){
+     S.answers.push({q:S.q+1,type:"order",correct:false,response:"ORDER_DATA_MISSING",points:0});
+     return next();
+   }
+   S.order=shuffle([...q.answer]);
+   order(q);
+ }else if(q.type==="choice")choice(q);
+ else speak(q);
+};
