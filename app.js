@@ -2259,3 +2259,97 @@ function finishSpeech(){
 function previewSpeechScoreV40(q){
  if(S.transcript)showSpeechResultV41(q);
 }
+
+
+// ===== v42 FINAL SPEECH FIX =====
+// Use the app's original startRec()/stopRec() functions directly.
+// No polling, no legacy "score" button, no separate listen() wrapper.
+
+S.speechCommittedV42=false;
+
+function speechV42Gain(raw){
+ const sb=speedBonus();
+ return {
+   gain:Math.round(raw*0.6)+(raw>=70?Math.round(sb.points*0.5):0),
+   speed:raw>=70?Math.round(sb.points*0.5):0
+ };
+}
+
+function speak(q){
+ const support=!!(window.SpeechRecognition||window.webkitSpeechRecognition);
+ const hasResult=!S.recognizing && S.speechScore!=null && String(S.transcript||"").trim().length>0;
+ const calc=hasResult?speechV42Gain(Number(S.speechScore)||0):null;
+
+ chrome(`<div class="round">${esc(q.round||"Question")}</div>
+   <div class="prompt">${esc(q.title||"문장을 읽어 보세요.")}</div>
+   <div class="speak-target">${esc(q.target||"")}</div>
+   <div class="sub">
+     ${S.transcript?`인식된 문장: <b>${esc(S.transcript)}</b>`:
+       S.recognizing?"영어 문장을 읽고, 다 읽으면 녹음 종료를 누르세요.":"마이크 버튼을 눌러 문장을 읽어 보세요."}
+   </div>
+   ${hasResult?`<div class="feedback ${Number(S.speechScore)>=70?"ok":"bad"}">
+      발음 점수 <b>${Number(S.speechScore)}점</b> · 획득 예정 <b>+${calc.gain}점</b>
+   </div>`:""}
+   ${!support?`<div class="feedback bad">현재 브라우저에서 음성 인식을 지원하지 않습니다.</div>`:""}
+   <div class="actions" id="speechActionsV42">
+     ${!support?"":
+       S.recognizing?`<button class="btn" id="stopSpeechV42">⏹ 녹음 종료</button>`:
+       hasResult?`<button class="btn secondary" id="retrySpeechV42">🎙️ 다시 녹음</button>
+                  <button class="btn" id="nextSpeechV42">NEXT →</button>`:
+                 `<button class="btn" id="startSpeechV42">🎙️ 녹음하기</button>`}
+   </div>`);
+
+ if(!support)return;
+
+ const start=$("#startSpeechV42");
+ if(start)start.onclick=()=>{
+   S.speechCommittedV42=false;
+   S.transcript="";
+   S.speechScore=null;
+   startRec(q);
+ };
+
+ const stop=$("#stopSpeechV42");
+ if(stop)stop.onclick=()=>stopRec(q);
+
+ const retry=$("#retrySpeechV42");
+ if(retry)retry.onclick=()=>{
+   S.speechCommittedV42=false;
+   S.transcript="";
+   S.speechScore=null;
+   startRec(q);
+ };
+
+ const nextBtn=$("#nextSpeechV42");
+ if(nextBtn)nextBtn.onclick=()=>{
+   if(S.speechCommittedV42)return;
+   S.speechCommittedV42=true;
+   nextBtn.disabled=true;
+
+   const raw=Number(S.speechScore)||0;
+   const {gain,speed}=speechV42Gain(raw);
+   const before=stage(S.score);
+
+   S.score+=gain;
+   if(raw>=70){S.correct++;S.combo++;}else S.combo=0;
+   S.answers.push({
+     q:S.q+1,type:"speak",correct:raw>=70,response:S.transcript,
+     speechScore:raw,points:gain,speedBonus:speed
+   });
+   updateLiveSession();
+   upsertRemoteScore(false);
+
+   const after=stage(S.score);
+   if(after>before)setTimeout(()=>evolutionPopup(after),120);
+   next();
+ };
+}
+
+// Any old speech scoring callback must only redraw the v42 result.
+// It must NEVER add score.
+function finishSpeech(){
+ const q=S.playQuestions?.[S.q];
+ if(q?.type==="speak")speak(q);
+}
+function previewSpeechScoreV40(q){speak(q);}
+function showSpeechResultV41(q){speak(q);}
