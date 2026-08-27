@@ -332,3 +332,10 @@ Supabase 연결 후에는 전 학생의 실시간 랭킹으로 변경할 수 있
 - 브라우저/컴퓨터 종료, 새로고침, 다른 기기 접속 후에도 동일한 문제 복원
 - 학생 게임 시작 전에도 Supabase 최신 문제를 다시 불러옴
 - localStorage는 캐시만 사용하며 Supabase 저장본을 덮어쓰는 원본으로 사용하지 않음
+
+
+## v44 — Supabase 문제 즉시 복원
+- 문제 편집 화면이 기존 questions/localStorage를 거치지 않고 game_questions를 직접 조회
+- SQL 화면에서 확인한 Q1~Q15 저장 데이터를 그대로 편집 화면에 표시
+- 저장 후 Supabase를 다시 조회해 화면 갱신
+- 페이지가 열릴 때도 Supabase 문제를 캐시에 자동 복원

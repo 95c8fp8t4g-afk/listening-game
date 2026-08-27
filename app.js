@@ -2553,3 +2553,210 @@ beginSharedGame=async function(ses){
  await loadQuestionsAuthoritativeV43();
  return _beginSharedGameV43.apply(this,arguments);
 };
+
+
+// ===== v44: direct Supabase question restore/editor =====
+// This editor renders DIRECTLY from game_questions rows.
+// It does not depend on old cached/default question objects.
+
+function v44DecodeRow(r){
+ if(r.type==="order"){
+   const d=extractOrderV39(r);
+   return {
+     question_no:Number(r.question_no),
+     type:"order",
+     round:r.round_name||"Question",
+     title:r.title||"",
+     fixed:d.fixed,
+     answer:d.order,
+     options:[...d.order],
+     target:"",
+     enabled:!!r.enabled
+   };
+ }
+ if(r.type==="choice"){
+   return {
+     question_no:Number(r.question_no),
+     type:"choice",
+     round:r.round_name||"Question",
+     title:r.title||"",
+     fixed:[],
+     options:Array.isArray(r.options)?r.options:[],
+     answer:(r.answer&&typeof r.answer==="object")?(r.answer.value||""):(r.answer||""),
+     target:"",
+     enabled:!!r.enabled
+   };
+ }
+ return {
+   question_no:Number(r.question_no),
+   type:"speak",
+   round:r.round_name||"Question",
+   title:r.title||"",
+   fixed:[],options:[],answer:"",
+   target:r.target||"",
+   enabled:!!r.enabled
+ };
+}
+
+async function v44FetchQuestions(){
+ const {data,error}=await supabaseClient
+   .from("game_questions")
+   .select("question_no,type,round_name,title,target,options,answer,enabled,updated_at")
+   .order("question_no",{ascending:true});
+ if(error)throw error;
+ return (data||[]).map(v44DecodeRow);
+}
+
+function v44Fields(q,i){
+ if(q.type==="order"){
+   return `<div class="order-editor-v30">
+     <label>① 학생에게 먼저 보여줄 대화 <small>(한 줄에 한 문장)</small></label>
+     <textarea data-v44-fixed="${i}">${esc((q.fixed||[]).join("\n"))}</textarea>
+     <label>② 학생이 순서를 맞출 대화 <small>(한 줄에 한 문장 · 입력 순서가 정답)</small></label>
+     <textarea data-v44-order="${i}">${esc((q.answer||[]).join("\n"))}</textarea>
+   </div>`;
+ }
+ if(q.type==="choice"){
+   return `<label>선택지 <small>(한 줄에 하나)</small></label>
+     <textarea data-v44-options="${i}">${esc((q.options||[]).join("\n"))}</textarea>
+     <label>정답</label>
+     <input data-v44-answer="${i}" value="${esc(q.answer||"")}">`;
+ }
+ return `<label>학생이 읽을 목표 문장</label>
+   <input data-v44-target="${i}" value="${esc(q.target||"")}">`;
+}
+
+editor=async function(){
+ const panel=$("#panel");
+ if(!panel)return;
+ panel.innerHTML=`<div class="card"><p class="sub">Supabase에서 저장된 문제를 불러오는 중…</p></div>`;
+
+ let dbQuestions;
+ try{
+   dbQuestions=await v44FetchQuestions();
+ }catch(err){
+   console.error(err);
+   panel.innerHTML=`<div class="card"><div class="feedback bad">저장된 문제를 불러오지 못했습니다.<br>${esc(err?.message||String(err))}</div></div>`;
+   return;
+ }
+
+ // Put the DB copy into the game state too.
+ questions=dbQuestions.map(q=>({
+   ...q,
+   items:q.type==="order"?shuffle([...(q.answer||[])]):[]
+ }));
+ localStorage.setItem("LQ_questions",JSON.stringify(questions));
+
+ panel.innerHTML=`<div class="card">
+   <span class="badge">TEACHER EDITOR</span>
+   <h2>게임 문제 편집</h2>
+   <p class="sub">아래 내용은 지금 Supabase에 실제 저장되어 있는 문제입니다.</p>
+   ${dbQuestions.map((q,i)=>`<div class="editor" data-v44-card="${i}">
+     <div class="q31head">
+       <b>Q${q.question_no}</b>
+       <label><input style="width:auto" type="checkbox" data-v44-enabled="${i}" ${q.enabled?"checked":""}> 학생에게 출제</label>
+     </div>
+     <div class="row">
+       <div><label>유형</label><select data-v44-type="${i}">
+         <option value="order" ${q.type==="order"?"selected":""}>대화 순서</option>
+         <option value="choice" ${q.type==="choice"?"selected":""}>객관식/빈칸</option>
+         <option value="speak" ${q.type==="speak"?"selected":""}>음성 인식</option>
+       </select></div>
+       <div><label>문제 지시문</label><input data-v44-title="${i}" value="${esc(q.title)}"></div>
+     </div>
+     <div id="v44Fields${i}">${v44Fields(q,i)}</div>
+   </div>`).join("")}
+   <div class="actions">
+     <button class="btn secondary" id="v44Reload">↻ Supabase에서 다시 불러오기</button>
+     <button class="btn" id="v44Save">💾 전체 문제 저장</button>
+   </div>
+ </div>`;
+
+ document.querySelectorAll("[data-v44-type]").forEach(sel=>{
+   sel.onchange=()=>{
+     const i=Number(sel.dataset.v44Type);
+     const q=dbQuestions[i];
+     // save common values from current card
+     q.title=(document.querySelector(`[data-v44-title="${i}"]`)?.value||"").trim();
+     q.enabled=!!document.querySelector(`[data-v44-enabled="${i}"]`)?.checked;
+     // save OLD type fields before switching
+     if(q.type==="order"){
+       q.fixed=(document.querySelector(`[data-v44-fixed="${i}"]`)?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+       q.answer=(document.querySelector(`[data-v44-order="${i}"]`)?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+     }else if(q.type==="choice"){
+       q.options=(document.querySelector(`[data-v44-options="${i}"]`)?.value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+       q.answer=(document.querySelector(`[data-v44-answer="${i}"]`)?.value||"").trim();
+     }else{
+       q.target=(document.querySelector(`[data-v44-target="${i}"]`)?.value||"").trim();
+     }
+     q.type=sel.value;
+     if(q.type==="order"){
+       q.fixed=Array.isArray(q.fixed)?q.fixed:[];
+       q.answer=Array.isArray(q.answer)?q.answer:[];
+     }else if(q.type==="choice"){
+       q.options=Array.isArray(q.options)?q.options:[];
+       if(typeof q.answer!=="string")q.answer="";
+     }else{
+       if(typeof q.target!=="string")q.target="";
+     }
+     document.querySelector(`#v44Fields${i}`).innerHTML=v44Fields(q,i);
+   };
+ });
+
+ $("#v44Save").onclick=async()=>{
+   const draft=dbQuestions.map((q,i)=>{
+     const x={...q};
+     x.title=(document.querySelector(`[data-v44-title="${i}"]`)?.value||"").trim();
+     x.enabled=!!document.querySelector(`[data-v44-enabled="${i}"]`)?.checked;
+     x.type=document.querySelector(`[data-v44-type="${i}"]`)?.value||x.type;
+     if(x.type==="order"){
+       x.fixed=(document.querySelector(`[data-v44-fixed="${i}"]`)?.value||"").split("\n").map(v=>v.trim()).filter(Boolean);
+       x.answer=(document.querySelector(`[data-v44-order="${i}"]`)?.value||"").split("\n").map(v=>v.trim()).filter(Boolean);
+     }else if(x.type==="choice"){
+       x.options=(document.querySelector(`[data-v44-options="${i}"]`)?.value||"").split("\n").map(v=>v.trim()).filter(Boolean);
+       x.answer=(document.querySelector(`[data-v44-answer="${i}"]`)?.value||"").trim();
+     }else{
+       x.target=(document.querySelector(`[data-v44-target="${i}"]`)?.value||"").trim();
+     }
+     return x;
+   });
+
+   const rows=draft.map(q=>({
+     question_no:q.question_no,
+     type:q.type,
+     round_name:q.round||"Question",
+     title:q.title||"",
+     target:q.type==="speak"?(q.target||null):null,
+     options:q.type==="order"?(q.answer||[]):q.type==="choice"?(q.options||[]):[],
+     answer:q.type==="order"?{fixed:q.fixed||[],order:q.answer||[]}:
+            q.type==="choice"?{value:q.answer||""}:null,
+     enabled:!!q.enabled,
+     updated_at:new Date().toISOString()
+   }));
+
+   const btn=$("#v44Save");
+   btn.disabled=true;btn.textContent="저장 중…";
+   const {error}=await supabaseClient.from("game_questions").upsert(rows,{onConflict:"question_no"});
+   if(error){
+     console.error(error);
+     alert("저장 실패: "+error.message);
+     btn.disabled=false;btn.textContent="💾 전체 문제 저장";
+     return;
+   }
+   alert("문제가 Supabase에 저장되었습니다.");
+   await editor();
+ };
+
+ $("#v44Reload").onclick=()=>editor();
+};
+
+// On page load, refresh cached questions from Supabase too.
+(async()=>{
+ try{
+   const fresh=await v44FetchQuestions();
+   if(fresh.length){
+     questions=fresh.map(q=>({...q,items:q.type==="order"?shuffle([...(q.answer||[])]):[]}));
+     localStorage.setItem("LQ_questions",JSON.stringify(questions));
+   }
+ }catch(e){console.error("V44 initial question restore failed",e)}
+})();
