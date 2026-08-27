@@ -2155,3 +2155,107 @@ listen=function(q){
  },100);
  return result;
 };
+
+
+// ===== v41: speech = record -> automatic score preview -> Retry or NEXT =====
+// No separate "점수 받기" button.
+
+function speech(q){
+ S.transcript="";
+ S.speechScore=null;
+ S.finalSpeechAttemptV41=null;
+ chrome(`<div class="round">${esc(q.round||"Question")}</div>
+   <div class="prompt">${esc(q.title||"문장을 읽어 보세요.")}</div>
+   <div class="speak-target">${esc(q.target||"")}</div>
+   <div id="speechResultV41" class="speech-result"><p class="note">마이크 버튼을 눌러 문장을 읽어 보세요.</p></div>
+   <div class="actions" id="speechActionsV41">
+     <button class="btn" id="recordSpeechV41">🎙️ 녹음하기</button>
+   </div>`);
+ $("#recordSpeechV41").onclick=()=>startSpeechAttemptV41(q);
+}
+
+function startSpeechAttemptV41(q){
+ S.transcript="";
+ S.speechScore=null;
+ S.finalSpeechAttemptV41=null;
+ const actions=$("#speechActionsV41");
+ if(actions)actions.innerHTML=`<button class="btn" disabled>🎙️ 듣는 중…</button>`;
+ const result=$("#speechResultV41");
+ if(result)result.innerHTML=`<p class="note">문장을 읽어 주세요…</p>`;
+
+ // Use the existing recognition implementation.
+ listen(q);
+
+ // Recognition code writes the recognized text into S.transcript.
+ // As soon as a transcript arrives, calculate the score automatically.
+ let waited=0;
+ const watch=setInterval(()=>{
+   waited+=100;
+   if(S.transcript){
+     clearInterval(watch);
+     showSpeechResultV41(q);
+   }else if(waited>=12000){
+     clearInterval(watch);
+     if(result)result.innerHTML=`<div class="feedback bad">음성을 인식하지 못했습니다. 다시 녹음해 주세요.</div>`;
+     if(actions)actions.innerHTML=`<button class="btn" id="retrySpeechV41">🎙️ 다시 녹음</button>`;
+     $("#retrySpeechV41").onclick=()=>startSpeechAttemptV41(q);
+   }
+ },100);
+}
+
+function showSpeechResultV41(q){
+ const raw=similarity(S.transcript,q.target);
+ const sb=speedBonus();
+ const gain=Math.round(raw*0.6)+(raw>=70?Math.round(sb.points*0.5):0);
+ S.speechScore=raw;
+ S.finalSpeechAttemptV41={
+   raw,gain,transcript:S.transcript,
+   speedBonus:raw>=70?Math.round(sb.points*0.5):0
+ };
+
+ const result=$("#speechResultV41");
+ if(result)result.innerHTML=`<div class="feedback ${raw>=70?"ok":"bad"}">
+   발음 점수 <b>${raw}점</b> · 획득 예정 <b>+${gain}점</b>
+ </div>`;
+
+ const actions=$("#speechActionsV41");
+ if(actions)actions.innerHTML=`
+   <button class="btn secondary" id="retrySpeechV41">🎙️ 다시 녹음</button>
+   <button class="btn" id="nextSpeechV41">NEXT →</button>`;
+
+ $("#retrySpeechV41").onclick=()=>startSpeechAttemptV41(q);
+ $("#nextSpeechV41").onclick=()=>commitSpeechV41();
+}
+
+function commitSpeechV41(){
+ const a=S.finalSpeechAttemptV41;
+ if(!a)return;
+ const btn=$("#nextSpeechV41");
+ if(btn){btn.disabled=true;btn.textContent="NEXT…";}
+
+ const before=stage(S.score);
+ S.score+=a.gain;
+ if(a.raw>=70){S.correct++;S.combo++;}else S.combo=0;
+ S.answers.push({
+   q:S.q+1,type:"speak",correct:a.raw>=70,response:a.transcript,
+   speechScore:a.raw,points:a.gain,speedBonus:a.speedBonus
+ });
+ S.finalSpeechAttemptV41=null;
+ updateLiveSession();
+ upsertRemoteScore(false);
+ const after=stage(S.score);
+ if(after>before)setTimeout(()=>evolutionPopup(after),120);
+ next();
+}
+
+// Neutralize old speech scoring entry points: they may be called by the legacy
+// recognition callback, but they must never award points or replace the v41 UI.
+function finishSpeech(){
+ const q=S.playQuestions?.[S.q];
+ if(q?.type==="speak" && S.transcript && !S.finalSpeechAttemptV41){
+   showSpeechResultV41(q);
+ }
+}
+function previewSpeechScoreV40(q){
+ if(S.transcript)showSpeechResultV41(q);
+}
