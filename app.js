@@ -420,13 +420,13 @@ function renderMini(){
  <p class="note">영→한 / 한→영이 번갈아 계속 출제됩니다. 미니게임 점수는 본 게임 랭킹에 반영되지 않습니다.</p></div></div>`);
  startMiniCountdown();
  document.querySelectorAll("[data-mini]").forEach(b=>b.onclick=()=>{if(remainingMs()<=0)return miniTimeUp();let ok=b.dataset.mini===correct;if(ok){miniState.score+=10;miniState.streak++}else miniState.streak=0;S.miniStreak=miniState.streak;upsertRemoteScore(false);b.classList.add(ok?"mini-ok":"mini-bad");document.querySelectorAll("[data-mini]").forEach(x=>x.disabled=true);
-   if(ok && miniState.streak>=30){setTimeout(()=>miniStampWin(),500);}
+   if(ok && miniState.streak>=20){setTimeout(()=>miniStampWin(),500);}
    else setTimeout(()=>{miniState.index++;renderMini()},650);
  });
 }
 function miniStampWin(){
- clearInterval(S.timerId);S.timerId=null;S.activityStatus="stamp_done";S.miniStreak=30;upsertRemoteScore(true);layout(`<div class="card hero stamp-win"><div class="stamp-emoji">🏅</div><span class="badge">MISSION COMPLETE</span><h1>도장 하나 획득!</h1>
- <p class="sub"><b>30개 연속 정답</b>을 달성했어요.</p>
+ clearInterval(S.timerId);S.timerId=null;S.activityStatus="stamp_done";S.miniStreak=20;upsertRemoteScore(true);layout(`<div class="card hero stamp-win"><div class="stamp-emoji">🏅</div><span class="badge">MISSION COMPLETE</span><h1>도장 하나 획득!</h1>
+ <p class="sub"><b>20개 연속 정답</b>을 달성했어요.</p>
  <div class="stamp-box">선생님께 화면을 보여드리고<br><b>도장판에 도장 1개를 받으세요!</b></div>
  <p class="note">이 화면은 선생님께 확인받기 전까지 닫지 마세요.</p></div>`);
 }
@@ -440,7 +440,7 @@ function teacher(){
 function statusLabel(r){
  if(r.activity_status==="main_game")return `🎧 본게임 ${Math.min(r.current_question||1,r.total_count||15)}/${r.total_count||15}`;
  if(r.activity_status==="mini_game")return `🎮 미니게임 · 연속 ${r.mini_streak||0}개`;
- if(r.activity_status==="stamp_done")return `🏅 도장 획득 · 30개 성공`;
+ if(r.activity_status==="stamp_done")return `🏅 도장 획득 · 20개 성공`;
  if(r.activity_status==="waiting")return `🏆 결과 대기`;
  return `⏳ 대기실`;
 }
