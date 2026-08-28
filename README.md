@@ -345,3 +345,12 @@ Supabase 연결 후에는 전 학생의 실시간 랭킹으로 변경할 수 있
 - 콘솔 오류 `ReferenceError: listen is not defined`를 발생시키던 v40 잔여 코드 제거
 - v44의 Supabase Q1~Q15 직접 복원 코드는 그대로 유지
 - 문제 데이터, 저장 형식, 점수, 진화, 랭킹 등 다른 기능은 수정하지 않음
+
+
+## v46 — 음성인식 최소 안정화
+- v45 기준, 문제 저장/복원/배열/랭킹/점수 등 다른 기능은 수정하지 않음
+- 음성인식을 continuous=false로 변경해 한 번의 발화만 인식
+- final transcript를 계속 이어붙이지 않아 동일 문구 반복 현상 방지
+- `don't forget don't forget ...` 같은 반복 인식 결과 자동 정리
+- 녹음 시작 전 이전 recognizer를 종료해 녹음 버튼 시작 안정성 개선
+- start() 실패 시 1회만 짧게 재시도

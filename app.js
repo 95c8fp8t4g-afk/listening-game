@@ -2650,3 +2650,136 @@ editor=async function(){
    }
  }catch(e){console.error("V44 initial question restore failed",e)}
 })();
+
+
+// ===== v46: minimal speech-recognition stability fix only =====
+// Keep the existing UI/game flow. Fix repeated transcripts and improve start reliability.
+
+function cleanSpeechTranscriptV46(text){
+ const words=String(text||"").trim().replace(/\s+/g," ").split(" ").filter(Boolean);
+ if(!words.length)return "";
+
+ // Collapse accidental repeated phrases such as:
+ // "don't forget don't forget don't forget ..." -> "don't forget"
+ for(let size=1;size<=Math.min(8,Math.floor(words.length/2));size++){
+   const phrase=words.slice(0,size).join(" ").toLowerCase();
+   let repeated=true;
+   for(let i=0;i<words.length;i+=size){
+     const chunk=words.slice(i,i+size).join(" ").toLowerCase();
+     if(chunk!==phrase){repeated=false;break;}
+   }
+   if(repeated)return words.slice(0,size).join(" ");
+ }
+
+ // Also cap an identical word repeated by recognition glitches.
+ const out=[];
+ for(const w of words){
+   if(out.length>=2 &&
+      out[out.length-1].toLowerCase()===w.toLowerCase() &&
+      out[out.length-2].toLowerCase()===w.toLowerCase())continue;
+   out.push(w);
+ }
+ return out.join(" ");
+}
+
+function startRec(q){
+ const R=window.SpeechRecognition||window.webkitSpeechRecognition;
+ if(!R){S.recognizing=false;return speak(q);}
+
+ // Stop any stale recognizer before creating a new one.
+ try{if(S.rec)S.rec.abort()}catch(e){}
+ S.rec=null;
+ S.transcript="";
+ S.speechScore=null;
+
+ const rec=new R();
+ S.rec=rec;
+ rec.lang="en-US";
+ rec.continuous=false;       // one student utterance per recording
+ rec.interimResults=true;
+ rec.maxAlternatives=1;
+ S.recognizing=true;
+
+ let finalText="";
+ let latestInterim="";
+
+ rec.onstart=()=>{
+   S.recognizing=true;
+   speak(q);
+ };
+
+ rec.onresult=e=>{
+   latestInterim="";
+   for(let i=e.resultIndex;i<e.results.length;i++){
+     const t=(e.results[i][0]?.transcript||"").trim();
+     if(!t)continue;
+     if(e.results[i].isFinal){
+       // Replace with the final utterance instead of repeatedly appending it.
+       finalText=t;
+     }else{
+       latestInterim=t;
+     }
+   }
+   S.transcript=cleanSpeechTranscriptV46(finalText||latestInterim);
+   const el=document.querySelector(".sub");
+   if(el)el.innerHTML=`인식된 문장: <b>${esc(S.transcript)}</b>`;
+ };
+
+ rec.onerror=e=>{
+   console.warn("speech recognition error",e?.error);
+   S.recognizing=false;
+   try{rec.abort()}catch(_){}
+   speak(q);
+ };
+
+ rec.onend=()=>{
+   S.recognizing=false;
+   S.transcript=cleanSpeechTranscriptV46(finalText||latestInterim||S.transcript);
+   S.speechScore=sim(S.transcript,q.target);
+   speak(q);
+ };
+
+ try{
+   rec.start();
+ }catch(e){
+   console.warn("speech start failed; retrying once",e);
+   S.recognizing=false;
+   try{rec.abort()}catch(_){}
+   setTimeout(()=>{
+     if(S.playQuestions?.[S.q]===q && !S.recognizing){
+       try{
+         const retry=new R();
+         S.rec=retry;
+         retry.lang="en-US";
+         retry.continuous=false;
+         retry.interimResults=true;
+         retry.maxAlternatives=1;
+         S.recognizing=true;
+         let f="",inter="";
+         retry.onstart=()=>speak(q);
+         retry.onresult=ev=>{
+           inter="";
+           for(let i=ev.resultIndex;i<ev.results.length;i++){
+             const t=(ev.results[i][0]?.transcript||"").trim();
+             if(ev.results[i].isFinal)f=t; else inter=t;
+           }
+           S.transcript=cleanSpeechTranscriptV46(f||inter);
+           const el=document.querySelector(".sub");
+           if(el)el.innerHTML=`인식된 문장: <b>${esc(S.transcript)}</b>`;
+         };
+         retry.onerror=()=>{S.recognizing=false;speak(q)};
+         retry.onend=()=>{S.recognizing=false;S.transcript=cleanSpeechTranscriptV46(f||inter||S.transcript);S.speechScore=sim(S.transcript,q.target);speak(q)};
+         retry.start();
+       }catch(_){S.recognizing=false;speak(q)}
+     }
+   },250);
+ }
+}
+
+function stopRec(q){
+ S.recognizing=false;
+ try{if(S.rec)S.rec.stop()}catch(e){}
+ S.transcript=cleanSpeechTranscriptV46(S.transcript);
+ S.speechScore=sim(S.transcript,q.target);
+ setTimeout(()=>speak(q),100);
+}
